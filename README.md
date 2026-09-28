@@ -6,7 +6,7 @@
 - **Project title:** ECE Balloon Bot
 - **Nature:** An exploratory capstone focused on building a **reliable, autonomous robotic atmospheric-sensing platform**, rather than merely constructing a conventional weather balloon.
 - **Primary goal:** Design a lightweight, low-power balloon payload that detects atmospheric events in real time; autonomously adapts its sensing, onboard computation, and communications; and completes a balloon mission with minimal human intervention while recording a high-quality **vertical atmospheric profile**.
-- **Core system:** Meteorological sensors, onboard state estimation, edge computing, wireless telemetry, energy monitoring, and autonomous decision-making, integrated into a lightweight payload.
+- **Core system:** STM32-based flight controller, meteorological sensors, onboard state estimation, edge computing, wireless telemetry, energy monitoring, and autonomous decision-making, integrated into a lightweight payload, with an ESP32-based ground station receiving telemetry and forwarding it to the dashboard.
 - **Student deliverables:** Payload hardware, embedded software, autonomous sensing algorithms, a ground-station interface/dashboard, and environmental test procedures.
 
 ## 2. Flight and communications
@@ -19,7 +19,7 @@
 | Flight control | **No propulsion, steering, or active altitude control required.** |
 | Preventing loss | Recovery cannot be guaranteed. Begin with bench tests, ground communication tests, and an **approved low-altitude tethered test**. For any later free flight, provide GPS tracking, onboard data storage, a trajectory-prediction and recovery plan, and an appropriate descent system. |
 | Regulatory note | Prof. Chen's preliminary view: Canadian Aviation Regulation **602.42** requires authorization for an unoccupied free balloon with gas-carrying capacity exceeding **115 ft³**, and the project should fall below that threshold. **Site/aviation clearance and any other applicable requirements still need to be checked before flight; this is not a blanket launch approval.** |
-| Illustrative flight data | [Example past balloon tracking records](https://traquito.github.io/search/spots/dashboard/?band=20m&channel=185&callsign=KD2KDD&dtGte=2024-03-22&dtLte=2024-04-04) shared by Prof. Chen. |
+| Illustrative flight data | [Example past balloon tracking records]([https://traquito.github.io/search/spots/dashboard/?band=20m&channel=185&callsign=KD2KDD&dtGte=2024-03-22&dtLte=2024-04-04](https://traquito.github.io/search/spots/dashboard/?band=20m\&channel=185\&callsign=KD2KDD\&dtGte=2024-03-22\&dtLte=2024-04-04)) shared by Prof. Chen. |
 
 **Unresolved:** Exact communications range, frequencies/devices, test/launch locations, authorization requirements in the specific flight scenario, and who covers any regulatory or flight-related costs (project budget, university, or students).
 
@@ -27,6 +27,7 @@
 
 | Topic | Requirement / guidance |
 |---|---|
+| Flight controller | **STM32 microcontroller** as the primary onboard flight computer. |
 | Size | Tentative envelope **within 20 × 20 × 20 cm**, adjustable according to device selection and design. |
 | Mass | Target **under 500 g**. |
 | PCB | A self-designed/custom PCB is **recommended**, particularly if it improves integration, mass, or reliability; not explicitly stated to be mandatory. |
@@ -45,6 +46,7 @@
 
 ## 5. Ground station and telemetry
 
+- Use an **ESP32-based ground station** to receive radio telemetry from the STM32-based balloon payload and forward the received data to the backend/dashboard.
 - Build a ground-station dashboard providing **real-time telemetry and visualization**.
 - **Minimum starting display:** Ambient temperature, pressure, relative humidity, GPS position/altitude, and power status.
 - Support reception and display of radio-transmitted sensor data and logging.
@@ -71,6 +73,7 @@
 
 - Exact atmospheric-event definitions, sensor accuracy requirements, and autonomy/decision-making algorithms.
 - Communication technology, operating frequencies, tested range, update rate, and concrete communication-health metrics.
+- Final STM32 model/board for the flight controller and final ESP32 model/board for the ground station.
 - Final payload dimensions, weight allocation, and validated environmental operating range.
 - Whether a custom PCB becomes a formal requirement.
 - Permitted test/launch sites, aviation and site clearances for each flight configuration, and responsibility for any related costs.
