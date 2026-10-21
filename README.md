@@ -52,107 +52,57 @@ The objective of this project is to design and develop a compact, lightweight, a
 ```text
 FLIGHT SIDE: STM32 processes and logs sensor data; selected telemetry is sent over LoRa.
 
-+----------------------------- FLIGHT PAYLOAD - ON BALLOON -----------------------------+
-|                                                                                      |
-|  +----------------------+                    +------------------------------------+   |
-|  | Pressure Sensor      |---+                | MicroSD storage                    |   |
-|  +----------------------+   |                | Full-resolution timestamped log   |   |
-|  +----------------------+   |                | Samples - Events - Health         |   |
-|  | Humidity Sensor      |---+                +------------------+-----------------+   |
-|  +----------------------+   |                                   ^                     |
-|  +----------------------+   |                                SPI/SDIO                  |
-|  | Temperature Sensor   |---+                                   v                     |
-|  +----------------------+   |         +-------------------------------------------+   |
-|                             +-- I2C ->|                                           |   |
-|  +----------------------+             |           STM32 flight MCU                |   |
-|  | SAM-M10Q GNSS        |--- UART ---->|                                           |   |
-|  | Position - GNSS      |             | Sensor acquisition + timestamps           |   |
-|  | altitude - Time      |             | Filtering + state estimation              |   |
-|  +----------------------+             | Event detection + adaptive sampling       |   |
-|                                       | Telemetry prioritization                  |   |
-|  +----------------------+             | Energy / communication health             |   |
-|  | MPU-6050 IMU         |--- I2C ----->|                                           |   |
-|  | Acceleration -       |             +--------------------+----------------------+   |
-|  | Rotation             |                                  ^                      |   |
-|  +----------------------+                                  | SPI                  |   |
-|                                                            v                      |   |
-|                                       +-------------------------------------------+   |
-|                                       | RFM95W LoRa                               |   |
-|                                       | SPI transceiver - 915 MHz antenna          |   |
-|                                       +--------------------+----------------------+   |
-|                                                            |                      |   |
-|                       +------------------------------------+----+                 |   |
-|                       | Transmission policy                     |                 |   |
-|                       | Periodic summaries                      |                 |   |
-|                       | Priority event alerts                   |                 |   |
-|                       | ACK + limited retries                   |                 |   |
-|                       +-----------------------------------------+                 |   |
-|                         (policy links to STM32 and RFM95W LoRa)                    |   |
-|                                                                                      |
-|  +--------------------------+      +-----------------------+                        |
-|  | Battery                  |----->| Power monitor         |<--- I2C ---> STM32      |
-|  | Lipo (TBD)               |      | Battery voltage /     |                        |
-|  +-------------+------------+      | current               |                        |
-|                |                   | INA219/INA226-class    |                        |
-|                v                   | (TBD)                 |                        |
-|  +--------------------------+      +-----------------------+                        |
-|  | Protection + regulation  |-- Supply rail ----------------------> STM32           |
-|  | All payload electronics  |                                                   |
-|  +--------------------------+                                                   |
-+--------------------------------------------------------------------------------------+
-                                           |
-                                         DATA v
-                                   +------------------+
-                                   | Wireless LoRa    |
-                                   |                  |
-                                   | ACK ^            |
-                                   +--------+---------+
-                                            |
-+------------------------------- GROUND STATION ---------------------------------------+
-|                                           |                                          |
-|                               +-----------v-----------+                              |
-|                               | RFM95W LoRa           |                              |
-|                               | 915 MHz antenna       |                              |
-|                               | SPI transceiver       |                              |
-|                               +-----------+-----------+                              |
-|                                           ^                                          |
-|                                           | SPI                                      |
-|                                           v                                          |
-|                               +-----------------------+                              |
-|                               | ESP32-S3              |                              |
-|                               | Receive / validate    |                              |
-|                               | ACK + USB / Wi-Fi     |                              |
-|                               +----+-------------+----+                              |
-|                                    |             :                                   |
-|                         USB / Wi-Fi|             :                                   |
-|                                    v             v                                   |
-|  +----------------------------+    :    +----------------------------------------+   |
-|  | Laptop / Python            |<---+    | Link status & acknowledgements         |   |
-|  | Telemetry ingestion        |         | Sequence numbers - ACK timeouts        |   |
-|  | Packet validation          |         | RSSI / SNR                             |   |
-|  +-------------+--------------+         | Missed packets tracked on both ends    |   |
-|                |                        +----------------------------------------+   |
-|                v                                                                     |
-|  +----------------------------+                                                      |
-|  | Ground processing          |                                                      |
-|  | & analysis                 |                                                      |
-|  | Filtering + validation     |                                                      |
-|  | Trends + event analysis    |                                                      |
-|  | Atmospheric profiling      |                                                      |
-|  +-------------+--------------+                                                      |
-|                |                                                                     |
-|                v                                                                     |
-|  +----------------------------+                                                      |
-|  | Web dashboard              |                                                      |
-|  | Live charts - Position     |                                                      |
-|  | Alerts - Link health       |                                                      |
-|  +----------------------------+                                                      |
-+--------------------------------------------------------------------------------------+
++------------------------------- FLIGHT PAYLOAD --------------------------------+
+|                                                                               |
+|  MS5611 pressure sensor --------- I2C -----+                                  |
+|  SHT45 humidity sensor ---------- I2C -----+                                  |
+|  LSM6DSO32 IMU ------------------ I2C -----+                                  |
+|  PT103J2 temperature -- divider -- ADC ----+----> [ STM32 flight MCU ]        |
+|  SAM-M10Q GNSS ------------------ UART ----+                |                 |
+|                                                           |                   |
+|                                              +------------+------------+      |
+|                                              |                         |      |
+|                                          SPI/SDIO                  SPI/GPIO   |
+|                                              |                         |      |
+|                                       [ MicroSD storage ]    [ LAMBDA62C-9S ] |
+|                                       Samples / events /           |          |
+|                                       health / timestamps        U.FL         |
+|                                                                     |         |
+|                                                   [ Abracon 915 MHz antenna ] |
+|                                                                               |
+|  STM32: filtering, state estimation, event detection, adaptive sampling,      |
+|         telemetry prioritization, ACK handling and limited retries.           |
+|                                                                               |
+|  Battery (TBD) --> protection / regulation --> all flight electronics         |
+|          |                                                                    |
+|          +--> power monitor (INA219/INA226-class, TBD) -- I2C --> STM32       |
++-------------------------------------------------------------------------------+
+                              |                       ^
+                         LoRa telemetry           LoRa ACKs
+                              v                       |
++------------------------------- GROUND STATION --------------------------------+
+|                                                                               |
+|  [ 915 MHz antenna ] -- RF -- [ LAMBDA62C-9S ] -- SPI/GPIO -- [ ESP32-S3 ]    |
+|                                                                  |            |
+|                                                            USB / Wi-Fi        |
+|                                                                  v            |
+|                    [ Laptop / Python telemetry ingestion ]                    |
+|                         |                          |                          |
+|                         v                          v                          |
+|              [ Ground processing ]        [ Link status / ACKs ]              |
+|              Filtering, validation,       Sequence numbers, RSSI, SNR,        |
+|              trends, event analysis,      missing packets, ACK timeouts       |
+|              atmospheric profiling                                            |
+|                         |                                                     |
+|                         v                                                     |
+|                   [ Web dashboard ]                                           |
+|                   Live charts, position, alerts, link health                  |
++-------------------------------------------------------------------------------+
 
 GROUND SIDE: Received telemetry is further analyzed, stored, and visualized.
 ```
 
-Figure 1: High-level block diagram of the ECE Balloon Bot flight payload and ground station architecture.[3][4][5]
+Figure 1: High-level block diagram of the ECE Balloon Bot flight payload and ground station architecture.[3][4][5][6][7][8]
 
 ## High-Level Scope of Requirements
 
@@ -210,7 +160,7 @@ The Balloon Bot should function as an autonomous atmospheric sensing platform in
 | The payload enclosure, PCB mounting, wiring, antenna connections, and sensor attachments must withstand handling, transport, launch, and descent without significant component displacement or electrical disconnection. | To prevent damage to payload by avoiding loose connections or component displacement during handling, transportation, flight, descent and landing. |
 | The payload should be modular and not rigid, to allow components to be replaced or repaired without requiring complete disassembly of the payload for ease of testing. | To simplify component replacement, troubleshooting, and repairs without requiring to disassemble the payload every time (Reducing testing time and maintenance complexity). |
 | The antenna must be attached to the payload in such a manner that the PCB, battery, and other conductive components do not impact the signal integrity of the communication setup. | To minimize interference and resulting signal degradation caused by nearby conductive components, improving the reliability and range of wireless communication. |
-| The balloon must abide by Canadian Aviation Regulation 602.42 and 602.33 for unoccupied free balloons and CAR 601.24 and Standard 621 for applicable tethered testing. | To ensure balloon operations follow applicable aviation legal and safety requirements in order to reduce risk to other aircrafts, property and people. |
+| Balloon operations must comply with applicable Canadian Aviation Regulations, including CAR 602.42 for large unoccupied free balloons and CAR 601.24 and Standard 621 where tethered objects constitute obstacles to air navigation. | To ensure balloon operations follow applicable aviation legal and safety requirements in order to reduce risk to other aircrafts, property and people. |
 | The selected radio module and operating frequency must comply with the Canadian Table of Frequency Allocation for public use, and the transmit power, antenna, and duty cycle shall comply with the Radiocommunication Regulations (SOR/96-484) legislation. | To ensure wireless communication operates within the permitted Canadian frequency bands and applicable limits, preventing interference from other frequencies. |
 | Hardware components like the sensors, antenna and others must account for temperature range of -60oC to 40oC for high altitude operation. This must be achieved through suitable component selection, insulation and thermal management. | To account for temperatures that the payload will encounter during high-altitude operation and maintaining reliable data collection, communication throughout operation. |
 | Pressure module must be capable of measuring pressures in the range of 10-110 kPa(kiloPascal) for high altitude operation. | To allow atmospheric pressure measurements across a wide range of altitudes, including the lower pressure the payload will encounter at higher altitude. |
@@ -222,15 +172,18 @@ Potential options include STM32, ATtiny/meg, raspberry Pi, custom IC/ASIC(Applic
 
 Microcontroller(MCU) trade off analysis
 
-| Scale of 1-5 | Weight |  | STM32 |  | ATtiny/meg |  | Raspberry Pi |  | Custom IC/ASIC |  | ESP32 |  |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| P-payload G-ground station | P | G | P | G | P | G | P | G | P | G | P | G |
-| Cost | 0.1 | 0.4 | 5 |  | 5 |  | 5 |  | 1 |  | 5 |  |
-| Mass | 0.2 | 0 | 5 |  | 5 |  | 4 |  | 5 |  | 4 |  |
-| Min. Temperature | 0.2 | 0 | 3 (-40 C) |  | 3(-40 C) |  | 3(-40 C) |  | 4(custom) |  | 3 |  |
-| Power efficiency | 0.3 | 0.1 | 5 |  | 5 |  | 1 |  | 5 |  | 2 |  |
-| Ease of use | 0.2 | 0.5 | 4 |  | 2 |  | 5 |  | 1 |  | 5 |  |
-| Total | - | - | 4.4 | 4.5 | 4 | 3.5 | 3.2 | 4.6 | 3.6 | 1.4 | 3.5 | 4.7 |
+Payload-side MCU comparison (scores from 1 to 5; weighted total out of 5):
+
+| Criterion | Weight | STM32 | ATtiny/meg | Raspberry Pi | Custom IC/ASIC | ESP32 |
+| --- | --- | --- | --- | --- | --- | --- |
+| Cost | 0.1 | 5 | 5 | 5 | 1 | 5 |
+| Mass | 0.2 | 5 | 5 | 4 | 5 | 4 |
+| Min. Temperature | 0.2 | 3 (−40 °C) | 3 (−40 °C) | 3 (−40 °C) | 4 (custom) | 3 |
+| Power efficiency | 0.3 | 5 | 5 | 1 | 5 | 2 |
+| Ease of use | 0.2 | 4 | 2 | 5 | 1 | 5 |
+| **Weighted total** | **1.0** | **4.4** | **4.0** | **3.2** | **3.6** | **3.5** |
+
+Ground-station comparative criterion scores were not recorded in the original table, so ground-side weighted totals are not reported here.
 
 The raspberry Pi and ESP 32 systems may result in some additional weight in the 10’s of grams thus receiving a mass rating of 4.
 Custom ASIC’s cannot be obtained free of charge from the lab.
@@ -259,7 +212,7 @@ Pressure sensor trade off analysis
 
 None of the 3 viable pressure sensors considered met the viable operation range, so insulation will be required.
 As seen above, the best pressure sensor would be the MS561101BA03.[7]
-At -40C, the humidity in the air will be negligible, so the BME280 will suffice as the humidity sensor. It also contains the contingency for temperature and pressure sensors and without many viable options to do the same, will be selected as the primary humidity sensor.
+Cold air has a lower water-vapour capacity, but relative humidity is not necessarily negligible at −40 °C. The selected humidity sensor is now the Adafruit SHT45, which offers better typical humidity accuracy than the BME280 [8]. External atmospheric temperature is measured by the PT103J2 and pressure by the MS5611. The SHT45 is not rated to measure ambient humidity at −60 °C; high-altitude humidity measurements are currently deprioritized.
 
 ## References
 
@@ -269,13 +222,15 @@ At -40C, the humidity in the air will be negligible, so the BME280 will suffice 
 
 [3] u-blox AG, "SAM-M10Q: u-blox M10 Standard Precision GNSS Antenna Module," Data Sheet, Rev. R05, Apr. 8, 2024. [Online]. Available: https://content.u-blox.com/sites/default/files/documents/SAM-M10Q_DataSheet_UBX-22013293.pdf. [Accessed: Oct. 15, 2026].
 
-[4] InvenSense Inc., "MPU-6000 and MPU-6050 Register Map and Descriptions," Rev. 4.0, Mar. 9, 2012. [Online]. Available: https://cdn.sparkfun.com/datasheets/Sensors/Accelerometers/RM-MPU-6000A.pdf. [Accessed: Oct. 15, 2026].
+[4] STMicroelectronics, "LSM6DSO32: iNEMO Inertial Module with Embedded AI," Data Sheet. [Online]. Available: https://www.st.com/resource/en/datasheet/lsm6dso32.pdf.
 
-[5] Adafruit Industries, Adafruit RFM69HCW and RFM9x LoRa Packet Radio Breakouts, Jul. 2024. [Online]. Available: https://cdn-learn.adafruit.com/downloads/pdf/adafruit-rfm69hcw-and-rfm96-rfm95-rfm98-lora-packet-padio-breakouts.pdf
+[5] RF Solutions, "LAMBDA62: LoRa RF Module," Data Sheet. [Online]. Available: https://mm.digikey.com/Volume0/opasdata/d220001/medias/docus/5952/LAMBDA62.pdf.
 
 [6] Littelfuse, Inc., "PT Series Standard Precision Interchangeable Thermistors," Data Sheet, Feb. 26, 2018. [Online]. Available: https://www.littelfuse.com/assetdocs/littelfuse-leaded-thermistors-standard-precision-pt-datasheet?assetguid=9edb82b2-89bd-4657-aa6b-3005ae32e88b. [Accessed: Oct. 15, 2026].
 
 [7] TE Connectivity, "MS5611-01BA03: Barometric Pressure Sensor, with Stainless Steel Cap," Data Sheet, Jun. 2017. [Online]. Available: https://www.te.com/commerce/DocumentDelivery/DDEController?Action=srchrtrv&DocNm=MS5611-01BA03&DocType=Data%20Sheet&DocLang=English&DocFormat=pdf&PartCntxt=MS561101BA03-50. [Accessed: Oct. 15, 2026].
+
+[8] Adafruit Industries, "Adafruit SHT45 Humidity and Temperature Sensor Breakout," Documentation. [Online]. Available: https://mm.digikey.com/Volume0/opasdata/d220001/medias/docus/5009/DS_1528_5665_Web.pdf.
 
 ## Appendices
 
