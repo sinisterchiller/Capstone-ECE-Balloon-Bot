@@ -1,511 +1,216 @@
-# ECE Balloon Bot — Hardware Requirements and Current Component Selection
+# ECE Balloon Bot — Component Selection Audit
 
-**Project:** ECE Balloon Bot
+**Revision:** 2.0  
+**Date:** 21 October 2026  
+**Scope:** Component choices only: exact revised parts, comparisons with the earlier selections, manufacturer operating specifications, and selection-specific limitations. Project requirements, system architecture, firmware, thermal design, flight procedures, and test plans are documented in the separate project README.
 
-**Client:** Prof. Yize Chen
+## 1. Selection summary
 
-**Document status:** Preliminary hardware requirements with current proposed component selections
+**Decision:** Retain the eight revised parts as the preferred **prototype component selections**. The current selection assumes the LoRa antenna and electronic modules are mounted in a **heated enclosure around −30 °C**, while the externally exposed temperature-sensing thermistor must tolerate **approximately −60 °C**. These are planned operating conditions, not a claim that the assembled hardware has already passed environmental testing.
 
-This document reflects the current capstone scope: an autonomous, lightweight, low-power atmospheric-sensing payload, a wireless ground station, and controlled testing. It distinguishes required functionality from currently selected hardware and optional flight objectives.
+| Function | Earlier selection | Revised selection | Selection assessment |
+|---|---|---|---|
+| LoRa transceiver | Adafruit RFM95W breakout (SX1276) | **RF Solutions LAMBDA62C-9S** (SX1262) | **Upgrade** — lower specified receive current, +22 dBm maximum TX; harder board integration |
+| LoRa antenna | TE Linx ANT-916-CW-RCS-SMA + SMA connector | **Abracon AEACAQ190012-S915** | **Trade-off in favor of cold rating and connection** — −40 °C vs −20 °C, but 3.5 dBi vs 4.8 dBi specified peak gain |
+| Humidity / temperature | Adafruit BME280 | **Adafruit 5665 / SHT45** | **Upgrade for humidity accuracy**; pressure and low-temperature air sensing now separate |
+| GNSS | Bare u-blox SAM-M10Q-00B | **SparkFun 21834 / SAM-M10Q breakout** | **Prototyping upgrade**, not a better GNSS receiver |
+| Accelerometer / gyro | Generic MPU-6050 module | **Adafruit 4692 / LSM6DSO32** | **Integration and feature upgrade**, with a motion-resolution trade-off |
+| Onboard microSD interface | Not yet selected | **Adafruit 4682 SPI/SDIO breakout** | **Selection completed**; card is separate |
+| External air temperature | BME280's internal temperature sensor | **Littelfuse PT103J2 thermistor** | **Major temperature-range improvement**: rated down to −80 °C |
+| Atmospheric pressure | BME280 | **MIKROE-4903 / MS5611** | **Major pressure-range improvement**: specified measurement range includes pressure near 12 km |
 
-The current architecture uses an **STM32 flight controller**, **ESP32-S3 ground controller**, **915 MHz LoRa telemetry**, environmental sensing, GNSS positioning, inertial sensing, onboard storage, and power/health monitoring. The selected modules are intended to be usable during development and carried forward into the final integrated system wherever practical.
+> **Selection-status meaning:** “Upgrade” refers to the particular specifications or integration advantages identified below. It does **not** mean the revised part is universally better or that the complete system is flight-qualified.
 
----
+## 2. Detailed choices and comparison
 
-## 1. System-Level Design Targets
+### 2.1 LoRa transceiver — RF Solutions LAMBDA62C-9S
 
-| Parameter | Current target or guidance |
-|---|---|
-| Required test altitude | **30–100 m above ground**, subject to site and aviation clearance |
-| Optional high-altitude objective | 10–12 km above sea level; **not part of the required 30–100 m testing scope** and only a separate stretch goal after flight-readiness review |
-| Payload dimensions | Tentatively within 20 × 20 × 20 cm |
-| Payload mass | Target under 500 g |
-| Operating temperature | Tentative design range of −20 °C to +40 °C; not yet validated |
-| Required measurements | Atmospheric temperature, relative humidity, pressure, position, altitude, and balloon motion |
-| Autonomous operation | Onboard event detection, state estimation, adaptive sensing, adaptive communication, and energy/health monitoring |
-| Flight control | No propulsion, steering, or active altitude control required |
-| Final demonstration | Live integrated payload and laptop dashboard demonstration at the university; outdoor balloon flight is not necessarily required |
+**Revised part:** [LAMBDA62C-9S — DigiKey](https://www.digikey.ca/en/products/detail/rf-solutions/LAMBDA62C-9S/9749699) · [LAMBDA62 manufacturer datasheet (PDF)](https://mm.digikey.com/Volume0/opasdata/d220001/medias/docus/5952/LAMBDA62.pdf)  
+**Earlier part:** [Adafruit RFM95W / product 3072 — DigiKey](https://www.digikey.ca/en/products/detail/adafruit-industries-llc/3072/6005357)
 
-> **Status:** Altitudes, dimensions, mass, environmental range, and budget are preliminary targets, not finalized component-level requirements or flight permissions.
-
----
-
-## 2. Current Selected Core Hardware
-
-These are the current proposed parts for the sensing and communication architecture. They are intended to be reused in the final build rather than treated as disposable prototype-only hardware.
-
-| Function | Selected component | Qty. | Status / notes |
-|---|---|---:|---|
-| Flight controller | **STM32 development board** | 1 | Architecture selected; exact STM32 board still to select |
-| Ground controller | **Freenove ESP32-S3 Development Board** | 1 | Selected; ground controller |
-| LoRa radio | **Adafruit RFM95W 868/915 MHz LoRa Radio Transceiver Breakout — Product 3072** | 2 | Selected; one payload, one ground station |
-| LoRa antenna | **TE Connectivity Linx ANT-916-CW-RCS-SMA** | 2 | Selected; 915 MHz external whip antenna |
-| LoRa antenna connector | **RF Solutions CON-SMA-EDGE-S** | 2 | Selected; SMA female edge-launch connector for RFM95W |
-| Environmental sensor | **Adafruit BME280 Breakout — Product 2652** | 1 | Selected; temperature, humidity, pressure |
-| GNSS | **u-blox SAM-M10Q-00B** | 1 | Selected candidate; bare surface-mount GNSS module with integrated antenna |
-| IMU | **MPU-6050 6-axis module** | 1 | Selected candidate; Amazon listing is MPU-6050, not MPU-6500 |
-| Onboard storage | MicroSD card + interface | 1 | Required; interface depends on selected STM32 board |
-| Battery | TBD | 1 | **Still to select** |
-| Power regulation | TBD | 1 set | **Still to select** |
-| Battery / power monitor | INA219 / INA226-class device or equivalent | 1 | **Still to select** |
-
-### Current Purchase Links
-
-- **[LoRa — Adafruit RFM95W]\(**https://www.digikey.ca/en/products/detail/adafruit-industries-llc/3072/6005357**)**
-- **[Ground ESP32-S3 — Freenove]\(**https://www.amazon.ca/Freenove-ESP32-S3-Dual-core-Microcontroller-Wireless/dp/B0FRRJCDHF/ref=sr_1_7?tag=snxca56-20&th=1**)**
-- **[LoRa Antenna — TE Connectivity ANT-916-CW-RCS-SMA]\(**https://www.digikey.ca/en/products/detail/te-connectivity-linx/ANT-916-CW-RCS-SMA/16630288**)**
-- **[Antenna Connector — RF Solutions CON-SMA-EDGE-S]\(**https://www.digikey.ca/en/products/detail/rf-solutions/CON-SMA-EDGE-S/5845767**)**
-- **[Humidity / Temperature / Pressure — Adafruit BME280]\(**https://www.digikey.ca/en/products/detail/adafruit-industries-llc/2652/5604372**)**
-- **[GNSS — u-blox SAM-M10Q-00B]\(**https://www.digikey.ca/en/products/detail/u-blox/SAM-M10Q-00B/16672678**)**
-- **[IMU — MPU-6050 Module]\(**https://www.amazon.ca/Acceleration-Sensors-Accelerometer-Three-Axis-Quadcopter/dp/B07V67DQ5N/ref=sr_1_6?crid=21Y04PTOO8F83&dib=eyJ2IjoiMSJ9.EV9aEqilTAbMihj9UjFSzRVe8IdjJsJmI_p-T_aRNLUPsThrG5bKyQmzs0tIkL--rSxMVCZw2jdr2u--3hIQlDrvjpFbNlOc0xjm4r7eilLE7iv5jnOMo2MsUVvWCBwDoF95EXO83xkyJg_EDAkm5_Inzql6qx_JWnhKCmr2JpxFSDmwwUvFPMSBR6LvNgw3kqUBLdkyLIkgeK0p5CHVvbF4nh2gs_Xe1d_Iljb4AEPAOz_wNIKDR0AQRVUs5Y3zBznn7MUqTUEVpt48GPzfZn5f6inl2DLk1UrGPkc2-Ro.hYpnyQIckpv80_Hha9C2dm_EMwrGkD3iqVnljh7IKF0&dib_tag=se&keywords=mpu6500&qid=1790614599&sprefix=mpu6500%2Caps%2C177&sr=8-6&th=1**)**
-
----
-
-## 3. Proposed Flight Electronics Architecture
-
-```text
-
-                                  ┌─────────────────────────┐
-
-                                  │       BME280            │
-
-                                  │ Temp / Humidity / Press │
-
-                                  └────────────┬────────────┘
-
-                                               │ I²C
-
-                                               ▼
-
-┌──────────────┐      UART / I²C        ┌──────────────┐        I²C       ┌──────────────┐
-
-│  SAM-M10Q    ├────────────────────────►              ◄──────────────────┤ Power /      │
-
-│  GNSS        │                        │              │                  │ Battery Mon. │
-
-└──────────────┘                        │    STM32     │                  └──────────────┘
-
-                                        │              │
-
-┌──────────────┐          I²C           │              │
-
-│  MPU-6050    ├────────────────────────►              │
-
-│  IMU         │                        └──────┬───────┘
-
-└──────────────┘                               │
-
-                                  ┌────────────┴────────────┐
-
-                                  │                         │
-
-                                  │ SPI                     │ SPI / SDIO
-
-                                  ▼                         ▼
-
-                         ┌────────────────┐          ┌─────────────┐
-
-                         │ Adafruit       │          │  MicroSD    │
-
-                         │ RFM95W         │          │  Storage    │
-
-                         └───────┬────────┘          └─────────────┘
-
-                                 │
-
-                                 │ RF
-
-                                 ▼
-
-                        ┌──────────────────┐
-
-                        │ CON-SMA-EDGE-S   │
-
-                        └────────┬─────────┘
-
-                                 │
-
-                                 ▼
-
-                        ┌──────────────────┐
-
-                        │ 915 MHz Antenna  │
-
-                        │ ANT-916-CW-RCS   │
-
-                        └──────────────────┘
-
-Battery → Protection / Regulation → STM32 + LoRa + GNSS + Sensors + Storage
-
-```
-
-> **Power-monitoring direction:** the battery/power monitor measures the supply and reports voltage/current/power data back to the STM32 over I²C; it is not a downstream load controlled by the STM32.
-
----
-
-## 4. Flight Payload Hardware Requirements
-
-| ID | Hardware | Qty. | Requirements and purpose | Current status |
-|---|---|---:|---|---|
-| H-01 | STM32 development board | 1 | Main controller for sensor acquisition, onboard state estimation, event detection, adaptive sampling, and telemetry management. | **Required — exact STM32 board TBD** |
-| H-02 | LoRa transceiver | 1 | Wireless communication with the ground station using the selected 915 MHz radio architecture. | **Selected — Adafruit RFM95W** |
-| H-03 | LoRa antenna | 1 | Antenna matched to the selected radio frequency and RF connector. | **Selected — TE ANT-916-CW-RCS-SMA** |
-| H-04 | LoRa antenna connector | 1 | Provide a 50 Ω SMA interface between the RFM95W and external antenna. | **Selected — CON-SMA-EDGE-S** |
-| H-05 | Atmospheric temperature sensor | 1 | Measure ambient air temperature for the vertical atmospheric profile and event detection. | **Selected — BME280** |
-| H-06 | Relative humidity sensor | 1 | Measure atmospheric humidity and detect sustained changes. | **Selected — BME280** |
-| H-07 | Barometric pressure sensor | 1 | Measure atmospheric pressure and support barometric altitude estimation. | **Selected — BME280** |
-| H-08 | GPS/GNSS module | 1 | Measure geographic position, altitude, time, and movement; support mission tracking. | **Selected candidate — SAM-M10Q** |
-| H-09 | Inertial measurement unit | 1 | Measure 3-axis acceleration and angular velocity to characterize payload movement, rotation, and launch/descent dynamics. | **Selected candidate — MPU-6050** |
-| H-10 | MicroSD card + interface | 1 | Store timestamped sensor, GNSS, IMU, event, system-health, and communication-health data onboard so mission data remains available if telemetry is interrupted. | **Required — exact interface/module depends on selected STM32 board** |
-| H-11 | Battery | 1 | Independently power sensing, processing, storage, GNSS, and radio throughout the mission. | **Required — TBD** |
-| H-12 | Power regulation and distribution | 1 set | Provide stable supply rails for the controller, sensors, GNSS receiver, storage, and radio. | **Required — TBD** |
-| H-13 | Battery monitoring circuit | 1 | Measure voltage and/or current to support energy estimation and autonomous power management. | **Required — TBD** |
-| H-14 | System temperature monitoring | 1 | Monitor electronics or battery thermal health separately from ambient atmospheric temperature if required. | **Required functionality — TBD** |
-| H-15 | Payload enclosure | 1 | Lightweight protection, secure mounting, appropriate sensor exposure, GNSS sky view, and antenna placement. | 3D Print |
-| H-16 | Custom PCB / carrier PCB | 1 | Integrate or mechanically mount controller, radio, GNSS, storage, power circuitry, and connectors into a reliable final assembly. | **Planned** |
-| H-17 | Wiring, connectors, and mounting hardware | 1 set | Secure electrical and mechanical integration. | **Required — TBD** |
-
-### Environmental Sensor Placement
-
-The BME280 should preferably be positioned **outside the main electronics enclosure or thermally isolated from the STM32, regulator, and LoRa radio** so that its temperature measurement represents ambient air rather than PCB self-heating.
-
-A practical arrangement is an external daughterboard connected to the main PCB using a small locking connector:
-
-```text
-
-External BME280
-
-    │
-
-    │ 3V3 / GND / SDA / SCL
-
-    ▼
-
-Locking 4-pin connector
-
-    │
-
-    ▼
-
-Main PCB / STM32
-
-```
-
-The final enclosure should expose the BME280 to airflow while shielding it from direct solar heating as much as practical.
-
-### GNSS Integration Note
-
-The **SAM-M10Q-00B is a surface-mount module**, not a breadboard breakout. It is therefore best treated as a component to be mounted directly on the final custom PCB. Its integrated GNSS antenna should be positioned with a clear view of the sky and kept away from large conductive objects, batteries, and other RF hardware where practical.
-
----
-
-## 5. Ground-Station Hardware
-
-| ID | Hardware | Qty. | Requirements and purpose | Current status |
-|---|---|---:|---|---|
-| G-01 | ESP32-S3 development board | 1 | Receive radio telemetry and forward it to the ground-station computer over Wi-Fi or USB. | **Selected — Freenove ESP32-S3** |
-| G-02 | LoRa transceiver | 1 | Receive telemetry from the payload using the same radio family and configuration. | **Selected — Adafruit RFM95W** |
-| G-03 | LoRa antenna | 1 | 915 MHz antenna matched to the selected radio and connector. | **Selected — TE ANT-916-CW-RCS-SMA** |
-| G-04 | LoRa antenna connector | 1 | SMA interface between radio and antenna. | **Selected — CON-SMA-EDGE-S** |
-| G-05 | Ground-station computer | 1 | Run the Python backend, store incoming telemetry, and present the web dashboard. Existing laptop is sufficient. | **Existing equipment acceptable** |
-
-### Initial Dashboard Data
-
-The ground station should initially display and log:
-
-- Atmospheric temperature
-- Relative humidity
-- Atmospheric pressure
-- GPS latitude and longitude
-- GPS/GNSS altitude
-- Barometric altitude estimate
-- Payload acceleration / motion state
-- Battery voltage / current / power status
-- LoRa RSSI
-- LoRa SNR
-- Packet sequence / packet-loss information
-- Time since last valid telemetry packet
-
----
-
-## 6. Communications Architecture
-
-### Flight Side
-
-```text
-
-STM32
-
-    │ SPI
-
-    ▼
-
-Adafruit RFM95W
-
-    │
-
-    ▼
-
-CON-SMA-EDGE-S
-
-    │
-
-    ▼
-
-TE ANT-916-CW-RCS-SMA
-
-```
-
-### Ground Side
-
-```text
-
-ESP32-S3
-
-    │ SPI
-
-    ▼
-
-Adafruit RFM95W
-
-    │
-
-    ▼
-
-CON-SMA-EDGE-S
-
-    │
-
-    ▼
-
-TE ANT-916-CW-RCS-SMA
-
-```
-
-The same radio and antenna architecture on both ends simplifies firmware development, testing, spares, and link-budget validation.
-
-The antennas do **not** need to point directly at one another. For whip antennas, maintaining roughly similar polarization is more important. A vertical or near-vertical installation is preferable where mechanically practical.
-
-### Acknowledgement System
-
-The ground station should return a short acknowledgement (ACK) after receiving a valid telemetry packet.
-
-```text
-STM32 payload
-   │
-   │ Telemetry packet #N
-   ▼
-ESP32-S3 ground station
-   │
-   │ ACK #N
-   ▼
-STM32 payload
-```
-
-The acknowledgement allows the STM32 to confirm that telemetry reached the ground station. The ESP32-S3 may also include received-link information such as RSSI and SNR in the ACK packet. The STM32 can use acknowledgement success/failure for communication-health monitoring, retransmission decisions, and fallback to onboard MicroSD logging when telemetry is unavailable.
-
----
-
-## 7. Test and Flight Hardware
-
-| ID | Hardware | Qty. | Requirements and purpose | Priority |
-|---|---|---:|---|---|
-| T-01 | Breadboards and jumper wires | 1 set | Initial sensor/controller/radio integration before final carrier PCB assembly. | Useful for development |
-| T-02 | Programming / debug hardware | As required | Program and debug the STM32 flight controller and ESP32-S3 ground controller using onboard USB/ST-LINK or an external ST-LINK/SWD probe depending on the selected STM32 board. | Required |
-| T-03 | Multimeter | 1 | Check supply voltages, current consumption, and electrical connections. | Required; lab equipment acceptable |
-| T-04 | Adjustable laboratory power supply | 1 | Evaluate power consumption, low-voltage behavior, and power distribution. | Recommended; lab equipment acceptable |
-| T-05 | Environmental test equipment | As available | Validate sensors, electronics, GNSS, radio, and battery performance across the eventual operating-temperature requirement. | Required for environmental validation |
-| T-06 | Balloon and lifting gas | 1 set | Provide adequate lift during an approved tethered test or subsequent flight. | Required for balloon testing |
-| T-07 | Tether and anchoring equipment | 1 set | Secure the balloon during approved low-altitude tests. | Required for tethered testing |
-| T-08 | Descent and recovery system | 1 set | Enable appropriate descent and recovery for a subsequent free flight. | Required for free flight |
-| T-09 | Ground tracking and recovery equipment | As needed | Locate and recover the payload after a free flight. | Required for free flight |
-
-A drone-carried sensor-payload test remains optional, subject to payload capacity, applicable drone rules, and site permissions.
-
----
-
-## 8. Hardware Support for Autonomous Operation
-
-| Autonomous function | Hardware dependency | Intended operation |
+| Property | Earlier RFM95W | Revised LAMBDA62C-9S |
 |---|---|---|
-| Atmospheric-event detection | BME280 + STM32 | Detect sustained atmospheric changes using algorithms to be defined and validated. |
-| Adaptive sampling | Sensors + STM32 | Increase or reduce sensor sampling according to mission state or detected events. |
-| Adaptive communication | STM32 + RFM95W | Adjust telemetry behavior according to event value, acknowledgement success/failure, and available energy. |
-| Altitude estimation | BME280 + SAM-M10Q | Combine barometric pressure with GNSS altitude for vertical-profile generation. |
-| Motion estimation | MPU-6050 + STM32 | Detect movement, acceleration, rotation, launch/descent dynamics, and possible tumbling. |
-| Energy-aware operation | Battery monitor + STM32 | Estimate available energy and alter operation when appropriate. |
-| Thermal-health monitoring | Electronics/battery temperature sensing | Detect conditions that may affect reliability or battery performance. |
-| Communication-health monitoring | RFM95W + STM32 / ESP32-S3 | Ground station measures RSSI/SNR and returns acknowledgement packets; the STM32 tracks acknowledgement success/failure while the ground station tracks packet loss and time since last valid telemetry. |
-| Autonomous data logging | STM32 + MicroSD | Preserve measurements and detected events during radio outages. |
+| Radio core | SX1276 family | SX1262 |
+| Maximum TX output | +20 dBm | +22 dBm |
+| Receive current | ~30 mA cited for original breakout | ~4.6 mA typical in LoRa RX |
+| TX current | Depends on TX setting | ~118 mA typical at +22 dBm |
+| Supply / logic | 3.3 V radio | 1.8–3.7 V module; 3.3 V nominal |
+| Temperature range | Verify exact breakout/module rating | −40 to +85 °C |
+| Host link | SPI | SPI plus control signals |
+| Antenna interface | Solderable RF antenna connection / connector option | Integrated U.FL receptacle |
 
----
+**Why revised is preferable:** Lower receive-mode current is valuable for two-way LoRa communication, including receive windows for acknowledgements; +2 dB maximum available transmit output may improve link budget where legal. The matched RF module with U.FL makes attachment of a compatible coax antenna easier.
 
-## 9. Remaining Critical Hardware Decisions
+**Trade-offs / constraints:** This is a **castellated surface-mount radio module**, not a header-ready breakout. Use a small carrier/adapter for robust breadboard connections; soldering directly onto unsupported pads is less mechanically reliable. The STM32 needs the radio's SPI signals, `BUSY`, `DIO1`, reset, and `TX_SWITCH` / `RX_SWITCH` control. The manufacturer documents **LDO** regulator configuration for the module. Its documented certified configuration is centered near **918 MHz**, with antenna-specific approval conditions; the selected Abracon antenna is **not automatically covered** by that modular approval. Manufacturer sensitivity settings and peak power do not guarantee a 100 km link.
 
-The core **controller, radio, antenna, environmental sensing, GNSS, and inertial sensing** architecture is now substantially defined. The following items still need to be selected before the flight electronics can be considered complete.
+**Selection verdict:** **Keep**, subject to carrier integration and confirmation of the authorized frequency/antenna combination.
 
-### 9.1 Power System
+### 2.2 LoRa antenna — Abracon AEACAQ190012-S915
 
-Required decisions:
+**Revised part:** [AEACAQ190012-S915 — DigiKey](https://www.digikey.ca/en/products/detail/abracon-llc/AEACAQ190012-S915/8593253) · [Abracon manufacturer datasheet (PDF)](https://abracon.com/datasheets/AEACAQ190012-S915.pdf)  
+**Earlier part:** [TE ANT-916-CW-RCS-SMA — DigiKey](https://www.digikey.ca/en/products/detail/te-connectivity-linx/ANT-916-CW-RCS-SMA/16630288) · [TE CW-RCS datasheet (PDF)](https://www.te.com/commerce/DocumentDelivery/DDEController?Action=srchrtrv&DocNm=CW-RCS_Series&DocType=Data+Sheet&DocLang=English&DocFormat=pdf&PartCntxt=ANT-916-CW-RCS-SMA) · previously required [CON-SMA-EDGE-S connector](https://www.digikey.ca/en/products/detail/rf-solutions/CON-SMA-EDGE-S/5845767)
 
-- Battery chemistry
-- Battery capacity
-- Nominal battery voltage
-- Low-temperature performance
-- Protection circuitry
-- Charging method, if rechargeable
-- 3.3 V / 5 V regulation requirements
-- Peak current capability during LoRa transmission and GNSS operation
-- Mission-duration margin
+| Property | Earlier TE RCS | Revised Abracon |
+|---|---|---|
+| Nominal band | 902–930 MHz | 915 MHz ±8 MHz (nominal 907–923 MHz) |
+| Specified peak gain | 4.8 dBi | 3.5 dBi |
+| Minimum rated temperature | −20 °C | **−40 °C** |
+| Impedance | 50 Ω | 50 Ω |
+| Specified VSWR | ≤2.0 | ≤2.5 per manufacturer datasheet |
+| RF termination | SMA male; separate RF connector/cable implementation | 100 mm coax with IPEX-style connector; verify exact MHF1 mating type |
+| Physical size | Right-angle whip | ~190 mm antenna length |
 
-```text
+**Why revised is preferable:** Extends the specified minimum temperature by **20 °C** and provides an integrated coax/connector arrangement that can mate to the LAMBDA62C U.FL interface when connector variants match. This avoids a separate antenna SMA edge connector.
 
-Battery
+**Trade-offs / constraints:** The original TE antenna has **higher specified peak gain** (4.8 vs 3.5 dBi); the new antenna is **not a pure RF-gain upgrade**. Installed gain depends on orientation, nearby conductors, mounting and enclosure materials. The plan is to place the Abracon **inside the heated approximately −30 °C enclosure**, because its −40 °C rating does **not** cover direct −60 °C exposure. Its **190 mm length** is difficult to fit inside an enclosure about **200 mm externally** once insulation thickness and clearance are considered. Avoid conductive/foil insulation adjacent to the antenna and provide coax strain relief. The different 3.5 dBi antenna is not established as covered by RF Solutions' original modular approval.
 
-   │
+**Selection verdict:** **Keep as the preferred prototype antenna**, conditional on internal fit, installed RF performance, and regulatory compatibility.
 
-   ▼
+### 2.3 Humidity and local temperature — Adafruit 5665 / Sensirion SHT45
 
-Protection
+**Revised part:** [Adafruit 5665 — DigiKey](https://www.digikey.ca/en/products/detail/adafruit-industries-llc/5665/17831054) · [Supplied Adafruit documentation (PDF)](https://mm.digikey.com/Volume0/opasdata/d220001/medias/docus/5009/DS_1528_5665_Web.pdf) · [Sensirion SHT45 product information](https://sensirion.com/products/catalog/SHT45)  
+**Earlier part:** [Adafruit BME280 / product 2652 — DigiKey](https://www.digikey.ca/en/products/detail/adafruit-industries-llc/2652/5604372) · [Bosch BME280 datasheet (PDF)](https://www.bosch-sensortec.com/media/boschsensortec/downloads/datasheets/bst-bme280-ds002.pdf)
 
-   │
+| Property | Earlier BME280 | Revised SHT45 |
+|---|---|---|
+| Typical humidity accuracy | ±3% RH | ±1% RH under specified conditions |
+| Typical temperature accuracy | ~±0.5 °C near 25 °C | ~±0.1 °C under specified conditions |
+| Operating temperature | −40 to +85 °C | −40 to +125 °C |
+| Relative-humidity range | 0–100% RH | 0–100% RH |
+| Pressure measurement | Yes | **No** |
+| Data interface | I²C or SPI | I²C |
+| Breadboard integration | Breakout | Breakout with header pads / STEMMA QT |
 
-   ▼
+**Why revised is preferable:** Better specified **typical** humidity and temperature accuracy and a dedicated RH sensor independent from external ambient-temperature and pressure sensors.
 
-Voltage Regulation / Distribution
+**Trade-offs / constraints:** The SHT45 does **not** replace BME280 pressure sensing; that role goes to the MS5611. Its published accuracy values are not promises at every operating temperature. Although it tolerates **−30 °C electronics temperatures**, it is **not rated for direct −60 °C ambient exposure**. An SHT45 kept inside the heated enclosure measures that environment's humidity, **not directly the outside relative humidity**. High-altitude RH is currently **deprioritized**, rather than treated as solved.
 
-   │
+**Selection verdict:** **Keep** for prototype and temperature-qualified humidity readings.
 
-   ├── STM32
+### 2.4 GNSS — SparkFun 21834 / u-blox SAM-M10Q breakout
 
-   ├── RFM95W
+**Revised part:** [SparkFun 21834 — DigiKey](https://www.digikey.ca/en/products/detail/sparkfun-electronics/21834/18735208) · [u-blox SAM-M10Q manufacturer datasheet (PDF)](https://docs.sparkfun.com/SparkFun_u-blox_SAM-M10Q/assets/component_documentation/SAM-M10Q_DataSheet_UBX-22013293.pdf) · [SparkFun breakout hardware guide](https://docs.sparkfun.com/SparkFun_u-blox_SAM-M10Q/hardware_overview/)  
+**Earlier part:** [Bare u-blox SAM-M10Q-00B — DigiKey](https://www.digikey.ca/en/products/detail/u-blox/SAM-M10Q-00B/16672678)
 
-   ├── SAM-M10Q
+| Property | Earlier bare SAM-M10Q | Revised SparkFun breakout |
+|---|---|---|
+| GNSS chip / antenna | SAM-M10Q with integrated antenna | **Same** SAM-M10Q with integrated antenna |
+| Published GNSS altitude limit | 80,000 m | Same underlying limit |
+| Published GNSS operating temperature | −40 to +85 °C | Same underlying IC limit; whole board not independently qualified by this |
+| Connections | Surface-mount pads | Qwiic and 0.1-inch header access; UART/I²C |
+| Supporting circuitry | Depends on your PCB | Ground plane, backup supply and breakout infrastructure |
 
-   ├── BME280
+**Why revised is preferable:** Much easier to prototype and debug without a custom GNSS PCB. The receiver's inherent GNSS performance and altitude specification are **not improved**; the choice improves integration convenience.
 
-   ├── MPU-6050
+**Trade-offs / constraints:** More expensive, larger, and with additional components that may have their own temperature limits (especially the backup battery). Install with suitable view of the sky through nonmetallic material.
 
-   └── MicroSD
+**Selection verdict:** **Keep for module-based prototyping**.
 
-```
+### 2.5 IMU — Adafruit 4692 / LSM6DSO32
 
-### 9.2 Onboard Data Storage
+**Revised part:** [Adafruit 4692 — DigiKey](https://www.digikey.ca/en/products/detail/adafruit-industries-llc/4692/13250946) · [Adafruit LSM6DSO/ISM330 family guide (PDF)](https://cdn-learn.adafruit.com/downloads/pdf/lsm6dsox-and-ism330dhc-6-dof-imu.pdf)  
+**Earlier part:** [Generic MPU-6050 module — prior Amazon listing](https://www.amazon.ca/dp/B07V67DQ5N)
 
-A MicroSD interface is recommended so the payload can retain:
+| Property | Earlier MPU-6050 | Revised LSM6DSO32 |
+|---|---|---|
+| Accelerometer selectable ranges | ±2, ±4, ±8, ±16 g | ±4, ±8, ±16, ±32 g |
+| Gyroscope range | Up to ±2000°/s | Up to ±2000°/s |
+| Silicon operating temperature | −40 to +85 °C | −40 to +85 °C |
+| Interface | I²C | I²C or SPI |
+| Board support | Generic module-specific | Documented Adafruit breakout and software examples |
 
-- Timestamped environmental measurements
-- GNSS position and altitude
-- IMU measurements
-- Detected atmospheric events
-- Battery / system-health information
-- Communication-health information
+**Why revised is preferable:** More transparent component traceability, established breakout documentation, optional SPI interface and a wider maximum accelerometer range for unusual shocks.
 
-This allows complete mission data to survive radio interruptions or loss of telemetry coverage.
+**Trade-offs / constraints:** The LSM6DSO32's lowest selectable ±4 g range is higher than the MPU-6050's ±2 g range, so it does **not automatically offer better sensitivity to small balloon oscillations**. The ±32 g rating is unnecessary for ordinary ascent but useful for high-acceleration events.
 
-### 9.3 Battery and Power Monitoring
+**Selection verdict:** **Keep**, choosing the acceleration range based on actual motion signals.
 
-A voltage/current monitor such as an **INA219-, INA226-, or equivalent-class device** should be evaluated for:
+### 2.6 Nonvolatile storage interface — Adafruit 4682
 
-- Battery voltage
-- Load current
-- Instantaneous power
-- Energy-use estimation
-- Low-battery event detection
-- Autonomous power-management decisions
+**Revised part:** [Adafruit 4682 — DigiKey](https://www.digikey.ca/en/products/detail/adafruit-industries-llc/4682/12822319) · [Adafruit microSD SPI/SDIO guide (PDF)](https://cdn-learn.adafruit.com/downloads/pdf/adafruit-microsd-spi-sdio.pdf)  
+**Earlier selection:** MicroSD storage required, **no specific module selected**.
 
-### 9.4 Connectors and Mechanical Integration
-
-The final PCB/enclosure design should define:
-
-- External BME280 connector
-- Programming/debug connector
-- Battery connector
-- MicroSD access
-- Antenna mechanical support / strain relief
-- GNSS placement and sky view
-- Sensor ventilation
-- Cable retention
-- PCB mounting points
-
----
-
-## 10. Preliminary Budget Allocation
-
-> These figures are planning allowances in CAD, not verified seller prices or purchase quotations. Existing laptop and university laboratory equipment are assumed available.
-
-| Part | Cost |
-|---|---:|
-| 2× RFM95W LoRa | $58.48 |
-| Freenove ESP32-S3 2-pack (ground controller + spare) | $35.95 |
-| STM32 flight controller | TBD |
-| 2× LoRa antennas | $23.82 |
-| 2× SMA connectors | $8.06 |
-| BME280 | $21.91 |
-| SAM-M10Q GNSS | $21.48 |
-| MPU-6050 5-pack | $17.91 |
-| **Total so far** | **$187.61** |
-
-**$312.39 remaining**
-
----
-
-## 11. Optional High-Altitude Mission — Additional Considerations
-
-The 10–12 km stretch objective is **optional and outside the required 30–100 m testing scope**. It requires a separate readiness review. Parts adequate for the required low-altitude tests should not automatically be considered qualified for high altitude.
-
-| Area | Additional considerations |
+| Property | Revised specification |
 |---|---|
-| BME280 | Measurement range and accuracy at low pressure and low temperature; verify suitability against expected flight profile |
-| GNSS | Confirm altitude and dynamic limits and validate RF placement in the final payload |
-| IMU | Verify low-temperature behavior and mechanical mounting |
-| Battery | Capacity, discharge performance, protection, and thermal behavior in the expected environment |
-| Enclosure | Insulation/protection while preserving valid ambient measurements and GNSS reception |
-| LoRa radio | Flight-specific link budget, range, propagation, antenna installation, configuration, and packet loss |
-| LoRa antenna | Verify installation performance, ground-plane effects, temperature rating, and mechanical strain relief |
-| Recovery | Appropriate descent system, position tracking, trajectory prediction, and recovery plan |
-| Data storage | Retain complete data throughout radio interruptions or loss of coverage |
-| Structural integration | Mass, lifting capability, attachment security, and environmental robustness |
+| Interfaces | SPI and SDIO |
+| Supply | **3.3 V only** |
+| Logic level | **3.3 V only** |
+| Physical format | Breakout with solderable header holes |
+| MicroSD card included? | **No** |
+| Complete breakout + card temperature qualification | **Not established by the interface selection alone** |
 
----
+**Why revised is preferable:** It converts an outstanding component choice into a documented, easily connected storage interface while retaining SPI and SDIO options.
 
-## 12. Open Hardware Decisions and Validation Gates
+**Trade-offs / constraints:** The 4682 is **not 5 V tolerant**; storage survival and reliability also depend on the chosen microSD card, not merely this interface board. A temperature-qualified card must be selected separately.
 
-- Final STM32 flight-controller board selection.
-- Final lawful radio operating parameters, RF power, range, telemetry update rate, and link-health metrics.
-- Required sensor accuracy, atmospheric-event definitions, detection algorithms, and sampling thresholds.
-- Power budget, mission duration, battery chemistry/capacity, and measured low-temperature performance.
-- MicroSD interface and storage capacity.
-- Battery / current-monitoring device.
-- Final payload mass, dimensions, component mounting, antenna support, and thermal design.
-- Final custom PCB / carrier PCB architecture.
-- External environmental-sensor connector and cable arrangement.
-- Approved test/launch locations, applicable aviation and site requirements, and responsibility for related costs.
-- Whether any outdoor free flight beyond the required 30–100 m test program or optional 10–12 km flight will be attempted.
+**Selection verdict:** **Keep**.
 
----
+### 2.7 Exposed atmospheric temperature — Littelfuse PT103J2
 
-## 13. Current Baseline Scope
+**Revised part:** [PT103J2 — DigiKey](https://www.digikey.ca/en/products/detail/littelfuse-ibu/PT103J2/1014538) · [Littelfuse PT thermistor series datasheet (PDF)](https://www.littelfuse.com/assetdocs/littelfuse-leaded-thermistors-standard-precision-pt-datasheet?assetguid=9edb82b2-89bd-4657-aa6b-3005ae32e88b)  
+**Earlier sensing:** [BME280 — DigiKey](https://www.digikey.ca/en/products/detail/adafruit-industries-llc/2652/5604372) used for atmospheric temperature.
 
-Build and validate an integrated autonomous sensing payload and functional ground-station dashboard for the **required 30–100 m test program** with:
+| Property | Earlier BME280 | Revised PT103J2 |
+|---|---|---|
+| Temperature rating | −40 to +85 °C | **−80 to +150 °C** |
+| Measurement element | Digital temperature IC | Passive NTC thermistor bead |
+| Signal | I²C / SPI | Resistance read through divider / ADC |
+| Nominal resistance | N/A | **10 kΩ at 25 °C** |
+| Beta coefficient | N/A | **3892 K (0–50 °C reference interval)** |
+| Quoted interchangeability | Different IC error specification | **±0.2 °C only over 0–70 °C** |
 
-- STM32 onboard processing
-- 915 MHz LoRa telemetry
-- Atmospheric temperature, humidity, and pressure sensing
-- GNSS position / altitude / timing
-- Acceleration and angular-motion sensing
-- Onboard data logging
-- Battery and power-health monitoring
-- Adaptive sensing and communication algorithms
-- Ground-station telemetry logging and dashboard visualization
+**Why revised is preferable:** The thermistor's rated range **includes −60 °C**, whereas the BME280's does not. Its small remote sensing bead can be placed **outside** the heated enclosure while sensitive electronics stay inside.
 
-No propulsion, active steering, or active altitude control is required.
+**Trade-offs / constraints:** Not a plug-and-play digital sensor: it needs a suitable resistor divider/ADC and a resistance–temperature conversion curve. Resistance rises markedly at low temperature; **accuracy at −60 °C must not be inferred from the ±0.2 °C specification for 0–70 °C**.
 
-Development should proceed through:
+**Selection verdict:** **Keep**. An additional thermistor for internal temperature monitoring is optional rather than a change to the chosen part.
 
-1. Bench-level electronics and sensor validation
-2. Ground-to-ground LoRa communication testing
-3. Integrated payload testing
-4. Environmental and power testing
-5. Approved low-altitude tethered testing
-6. Separate flight-readiness review before any free flight
+### 2.8 Atmospheric pressure — MIKROE-4903 / TE MS5611
+
+**Revised part:** [MIKROE-4903 Altitude 6 Click — DigiKey](https://www.digikey.ca/en/products/detail/mikroelektronika/MIKROE-4903/16182509) · [TE MS5611 manufacturer datasheet (PDF)](https://www.te.com/commerce/DocumentDelivery/DDEController?Action=showdoc&DocId=Data+Sheet%7FMS5611-01BA03%7FB3%7Fpdf%7FEnglish%7FENG_DS_MS5611-01BA03_B3.pdf%7FMS561101BA03-50) · [MikroElektronika board page](https://www.mikroe.com/altitude-6-click)  
+**Earlier part:** [Adafruit BME280 — DigiKey](https://www.digikey.ca/en/products/detail/adafruit-industries-llc/2652/5604372)
+
+| Property | Earlier BME280 | Revised MS5611 |
+|---|---|---|
+| Specified pressure range | 300–1100 hPa | **10–1200 mbar extended range** |
+| Range containing ~193 hPa (12 km standard atmosphere)? | **No** | **Yes** |
+| Region of detailed / full-accuracy specifications | BME280's own pressure specification within normal range | **450–1100 mbar** |
+| Operating temperature | −40 to +85 °C | −40 to +85 °C |
+| Digital interface | I²C / SPI | I²C or SPI on Click board; I²C default |
+| Breakout supply/logic | Depends on breakout | **3.3 V** |
+
+**Why revised is preferable:** The **BME280 is below its specified pressure limit** by 12 km (standard atmospheric pressure ~193 hPa), while the **MS5611 is still within its 10–1200 mbar extended measurement range**. The Click board supplies an accessible module format.
+
+**Trade-offs / constraints:** The MS5611's **full-accuracy range begins at 450 mbar**; measuring 193 hPa is not the same as having guaranteed high precision there. Temperature protection does not remove the need for the pressure sensor to be **pressure-equalized with outside air**; the device cannot infer ambient pressure from a sealed heated chamber. Interface selection on the Click board uses jumpers.
+
+**Selection verdict:** **Keep as the pressure-sensing prototype choice**, conditional on low-pressure accuracy characterization.
+
+## 3. Component operating-condition summary
+
+**Important:** Temperature ranges below are the applicable IC/module/antenna ratings stated in the linked specifications. They do **not automatically qualify an entire breakout**, including backup cells, connectors, adhesives, or the microSD card.
+
+| Revised component | Key operating conditions | Planned installation | Selection-specific limitation |
+|---|---|---|---|
+| LAMBDA62C-9S | 1.8–3.7 V; **−40 to +85 °C**; up to +22 dBm TX | Heated enclosure ~−30 °C | Carrier needed; specific certified radio/antenna operating conditions |
+| Abracon AEACAQ190012-S915 | 915 ±8 MHz; **−40 to +85 °C**; 3.5 dBi peak; 50 Ω | **Inside heated enclosure** | 190 mm fit, installation detuning, antenna approval |
+| SHT45 | **−40 to +125 °C**; 0–100% RH; I²C | Heated enclosure for prototype measurement | Not qualified to sense −60 °C exterior RH directly |
+| SparkFun SAM-M10Q | Receiver **−40 to +85 °C**; GNSS altitude limit 80 km | Heated enclosure, antenna sky-facing | Backup cell/whole-board low-temp qualification not verified |
+| LSM6DSO32 | **−40 to +85 °C**; accel ±4 to ±32 g | Heated enclosure | Range selection and low-motion noise trade-off |
+| Adafruit microSD 4682 | **3.3 V supply and I/O**, SPI/SDIO | Heated enclosure | Full board and separately purchased card temperature rating not established |
+| PT103J2 | **−80 to +150 °C**; 10 kΩ @25 °C | **Outside**, exposed to ambient air | Cold-end conversion accuracy / ADC design |
+| MIKROE-4903 / MS5611 | **−40 to +85 °C**; 10–1200 mbar extended pressure range | Warm but exposed to exterior static pressure | Accuracy outside 450–1100 mbar full-accuracy interval |
+
+## 4. Final component-selection decisions
+
+| Revised part | Decision | What prevents treating its selection as unconditionally final |
+|---|---|---|
+| **LAMBDA62C-9S** | **Keep** | Regulatory frequency/antenna configuration; mechanical carrier |
+| **AEACAQ190012-S915** | **Keep, conditional** | Physically fitting inside warm enclosure, realized RF performance, certification compatibility |
+| **Adafruit SHT45** | **Keep** | External −60 °C RH is not within this sensor's specification (currently not a priority) |
+| **SparkFun SAM-M10Q** | **Keep** | Whole-breakout low-temperature qualification, particularly backup cell |
+| **Adafruit LSM6DSO32** | **Keep** | No major component-selection blocker |
+| **Adafruit microSD 4682** | **Keep** | Compatible rated microSD card still to select |
+| **Littelfuse PT103J2** | **Keep** | Temperature calibration/uncertainty at −60 °C |
+| **MIKROE-4903 / MS5611** | **Keep, conditional** | Accuracy around 193 hPa is not covered by quoted full-accuracy range |
+
+**Conclusion:** The eight revised choices are defensible for prototype component selection. The meaningful improvements over the previous list are lower receive-mode radio current, improved typical RH accuracy, a dedicated external thermistor rated for −60 °C conditions, a pressure sensor whose range extends to the target high altitude, and ready-made GNSS/IMU/storage boards. The Abracon antenna trades some published peak gain for a colder temperature rating and a more convenient coax/U.FL-style connection. **Keeping it inside the heated enclosure makes the temperature range plausible, but the installed antenna and its radio certification still require confirmation.**
