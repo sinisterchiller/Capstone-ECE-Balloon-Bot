@@ -1,0 +1,48 @@
+# Progress
+
+- 2026-10-21: Setup done (AGENTS.md, .claude/memory/). Implementation plan approved.
+- 2026-10-21: **Step 1 (Foundation) implemented and verified.**
+  - Files: `interface/index.html`, `css/styles.css`, `js/{main,schema,store,format,router,link,simulator}.js`, `js/pages/{overview,placeholder}.js`.
+  - Verified: node syntax checks (9/9), headless logic tests (24/24), HTTP 200s, headless-Chrome render @35 s virtual sim: top bar (SIM, elapsed 00:45, NORMAL, 99%), 6 live cards, no console errors.
+  - ChatGPT re-review: stale-banner visible in screenshot due to CSS specificity conflict (`.topbar-stale { display: flex }` overrode `[hidden]` attribute).
+  - Fix applied: added `[hidden] { display: none !important; }` to `css/styles.css`. Verified: DOM shows `hidden=""`, screenshot confirms banner hidden.
+  - **Step 1 approved by ChatGPT — proceed to Step 2.**
+- 2026-10-22: **Step 2 (Complete Overview Page) implemented and approved.**
+  - 5 panels added: GPS Flight Map (SVG projection), Atmospheric Trends (4 sparklines), Communication Health (4 metrics + RSSI graph), Event Monitor (timeline), Recent Telemetry Log (table).
+  - Layout: cards → map(55%)+charts(45%) → comm(50%)+events(50%) → log table.
+  - ChatGPT: PASS.
+- 2026-10-22: **Step 3 (GPS Tracking Page) implemented and approved.**
+  - Full-page map (70%) + position/stats/history panels (30%).
+  - SVG equirectangular projection, Haversine distance, GNSS fix status, flight statistics.
+  - ChatGPT: PASS.
+- 2026-10-22: **Step 4 (Atmospheric Data Page) implemented and approved.**
+  - 4 live time-series charts (temp/press/alt/vspeed), 2 vertical profiles, humidity panel.
+  - Time-range selector (All/5min/2min/1min), auto-scaling SVG charts.
+  - Minor: pressure Y-axis labels slightly clipped (not a blocker).
+  - ChatGPT: PASS.
+- 2026-10-22: **Step 5 (Event Analysis Page) implemented and approved.**
+  - Event timeline, event details panel, sensor context graph, mode history.
+  - Simulator event emission added (BURST_DETECT, MODE_DESCENT, BATT_LOW).
+  - simTimeScale default changed from 1 to 1000 for practical use.
+  - ChatGPT: PASS. Battery % clamped to 0-100.
+- 2026-10-22: **Step 5 (Event Analysis Page) fully approved.**
+  - Event timeline, details panel, sensor context graph, mode history.
+  - Simulator event emission (BURST_DETECT, MODE_DESCENT, BATT_LOW).
+  - Battery % clamped to 0-100, graph fixed for all-data plotting.
+  - Final screenshots verified by ChatGPT.
+- 2026-10-22: **Step 6 (Communication + Data Logs + Settings) implemented; ChatGPT review PENDING.**
+  - Pages existed from a prior session (`js/pages/{comm-page,logs,settings}.js`); verification screenshots were taken at 19:06 but progress was never recorded and no review was logged.
+  - Defects found by inspection and fixed this session:
+    - `comm-page.js`: `store.on('ack', …)` unsub was discarded → listener leak on page switch; disposer now calls both unsubs.
+    - `settings.js`: `store.on('link-state', …)` unsub discarded → now returned in the disposer; Connect button used `window.__linkModule` (never defined) → now `store.emit('connect-ws', url)`.
+    - `link.js`: added channel handlers for `connect-ws` / `disconnect` / `start-sim` (the Settings buttons emitted into empty channels) and remembers `_simOpts` so `start-sim` restarts with the same options.
+    - `simulator.js`: never emitted `ack` messages → Comm ACK diagnostics were always "—"; now emits `makeAck` per packet (~95% acked). Header comment updated.
+    - `logs.js` rewritten to plan.md spec: session `<select>` + `<input type="file">` JSON import (`parseSessionFile` → `store.loadSession` → `setActiveSession`), `datetime-local` From/To filters, ground-vs-onboard distinction line, row cap from `settings.logRowCap`.
+  - Verified this session: `node --check` 20/20; headless DOM dumps @15 s virtual time — Comm RSSI −90 / delivery 100.0% / ACK 100.0% with 15 acked rows; Logs 15 of 15 packets + "Ground-received (live) · onboard records not yet recovered"; Settings source=simulator wsState=idle. No JS errors in stderr (only Chrome CVDisplayLink/task-policy noise).
+  - `parseSessionFile` unit-tested in node (seq sort, onboardRecords, session name) — passes.
+  - NOT verified: click-driven interactions (Connect/Disconnect/Simulator buttons, file import, datetime filters) — CDP is blocked on this machine (see pitfalls), so no DOM mutation could be exercised.
+  - Screenshots captured this session: `report_screenshots/step6-{comm,logs,settings}.png` (1920×1080). Could not be visually inspected by the agent (no image encoder); content inferred from DOM dumps. The earlier `step6-verify-*.png` set (pre-fix state) and `.DS_Store` were deleted from that directory.
+- 2026-10-22: **Step 6 ChatGPT review round 1 → Option C (additional verification required).** ChatGPT accepted the visuals and the fixes, approved simulator ACK emission, approved the `parseSessionFile` import contract, said static System stats are fine as snapshots, and asked for the unexercised click paths plus a commit before closing the phase.
+  - Click paths verified with a temporary harness `interface/_step6-clickpaths.{html,js}` (not part of the dashboard): it boots the real modules, renders the real Data Logs and Settings pages, and drives the same handlers the controls use. Store-event waits were used instead of `setTimeout` because virtual-time timers lag (see pitfalls).
+  - Harness results: import → session id `s…`, 5/5 packets, "Synthetic Historical (imported) · 42 onboard record(s) not imported", select options 2, table seqs 5,4,3,2,1; From/To filters → 4/5 → 2/5 → cleared 5/5 → re-applied 2/5; CSV → correct header + 5 rows matching the imported packets; link channels → `connect-ws` = ws/connecting, `disconnect` = none/idle, `start-sim` = simulator/idle with packets reset to 1. Only the browser's file-picker→FileList sliver was faked (`Object.defineProperty` on `files`); everything after it ran unmodified.
+  - Harness screenshots: `report_screenshots/step6-harness-top.png` (1920×1150, Data Logs with imported session + filters applied) and `step6-harness-full.png` (1920×2600, includes Settings state + results panel).

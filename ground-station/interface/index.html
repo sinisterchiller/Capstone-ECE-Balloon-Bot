@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Balloon Bot — Ground Station</title>
+  <link rel="stylesheet" href="css/styles.css">
+</head>
+<body>
+  <div class="shell">
+    <aside class="sidebar">
+      <div class="brand">
+        <div class="brand-title">BALLOON BOT</div>
+        <div class="brand-sub">GROUND CONTROL</div>
+      </div>
+      <nav class="nav" aria-label="Main navigation">
+        <a href="#/overview">Overview</a>
+        <a href="#/gps">GPS Tracking</a>
+        <a href="#/atmospheric">Atmospheric Data</a>
+        <a href="#/events">Event Analysis</a>
+        <a href="#/comm">Communication</a>
+        <a href="#/logs">Data Logs</a>
+        <a href="#/settings">Settings</a>
+      </nav>
+    </aside>
+
+    <header class="topbar">
+      <div class="topbar-mission" id="tb-mission" title="Mission name">—</div>
+      <div class="topbar-stale" id="tb-stale" hidden>
+        <span class="stale-label">⚠ TELEMETRY STALE</span>
+        <span class="stale-ago mono" id="tb-stale-ago">00:00</span>
+        <span class="stale-hint">since last packet</span>
+      </div>
+      <div class="topbar-cluster">
+        <div class="tb-item" title="Elapsed mission time">
+          <span class="tb-label">MISSION</span>
+          <span class="tb-value mono" id="tb-elapsed">—</span>
+        </div>
+        <div class="tb-item" title="Time since last received packet">
+          <span class="tb-label">LAST PKT</span>
+          <span class="tb-value mono" id="tb-lastpkt">—</span>
+        </div>
+        <div class="tb-chip" id="tb-mode" title="Operating mode">—</div>
+        <div class="tb-chip link" id="tb-link" title="Radio link status">
+          <span class="dot"></span>
+          <span class="tb-value" id="tb-link-label">NO LINK</span>
+        </div>
+        <div class="tb-chip battery ok" id="tb-battery" title="Battery">
+          <span class="tb-value mono" id="tb-battery-val">—</span>
+          <span class="battery-bar"><span id="tb-battery-fill"></span></span>
+        </div>
+      </div>
+    </header>
+
+    <main class="page-root" id="page-root"></main>
+  </div>
+
+  <script type="module" src="js/main.js"></script>
+</body>
+</html>
