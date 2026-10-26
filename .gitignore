@@ -2,3 +2,10 @@
 node_modules/
 _cruft-2026-10-22/
 report_screenshots/
+
+# Ground-station server (Python)
+ground-station/server/data/
+__pycache__/
+*.pyc
+*.pyo
+.venv/

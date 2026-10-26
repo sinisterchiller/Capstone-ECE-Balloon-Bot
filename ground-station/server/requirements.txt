@@ -1,0 +1,4 @@
+# Balloon Bot ground-station server — Python dependencies.
+# Versions are lower bounds for now; pin exact versions after S2-S4 tests pass.
+pyserial>=3.5
+websockets>=12.0
