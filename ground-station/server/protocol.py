@@ -200,6 +200,10 @@ def _validate_event(raw: dict) -> Optional[dict]:
         "unit": _str(raw.get("unit")),
         "mode": _one_of(raw.get("mode"), MODES, None),
         "seq": seq,
+        # RF metadata may be present on events that arrive with the
+        # same radio reception record as the enclosing telemetry.
+        "rssi": _num(raw.get("rssi")),
+        "snr": _num(raw.get("snr")),
     }
 
 

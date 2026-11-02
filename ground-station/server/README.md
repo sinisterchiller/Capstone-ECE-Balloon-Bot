@@ -4,10 +4,10 @@ Python ground-station server for the ECE 490 capstone (Group 13). It ingests
 telemetry from the ESP32-S3 ground receiver over USB serial, validates and
 translates messages into the **existing dashboard's exact WebSocket contract**,
 and broadcasts live data to connected dashboard clients. Local mission
-recording is planned for S4.
+recording is implemented in S4.
 
-**Stage status:** **S3 — USB serial ingestion and recovery, implemented pending review**.
-Stages S4–S5 are not yet implemented; see [implementation-plan.md](implementation-plan.md).
+**Stage status:** **S3 — USB serial ingestion and recovery, implemented pending review**; **S4 — Ground recording + export, implemented pending review**.
+Stages S5 is not yet implemented; see [implementation-plan.md](implementation-plan.md).
 
 ---
 
@@ -58,6 +58,7 @@ usage: ground-station-server [-h] [--host HOST] [--port PORT]
                              [--data-dir DATA_DIR]
                              [--log-level {DEBUG,INFO,WARNING,ERROR}]
                              [--fixture FILE] [--mission NAME]
+                             [--export EXPORT]
 
 Balloon Bot ground-station server (ESP32 serial -> dashboard WS).
 
@@ -73,6 +74,11 @@ options:
   --fixture FILE        JSONL fixture to replay through the ingestion path
                         (offline, deterministic; no hardware required)
   --mission NAME        mission name for the hello frame (default 'Balloon Bot')
+  --export EXPORT       export a JSONL session to dashboard JSON shape.
+                        Accepts a session filename stem (without .jsonl)
+                        or a path ending in .jsonl (absolute paths are
+                        allowed only when they resolve inside --data-dir).
+                        Writes .json to the same directory.
 ```
 
 **Default binding is loopback-only** (`127.0.0.1`). The server is never exposed
@@ -85,6 +91,8 @@ python3 main.py --help
 python3 main.py                                   # no serial device (WS server only, S2+)
 python3 main.py --serial-port /dev/cu.usbmodem1401 --baud 115200
 python3 main.py --data-dir ./data --log-level DEBUG
+python3 main.py --export my-session               # export a JSONL session to JSON
+python3 main.py --export ./data/my-session.jsonl  # export with full path
 ```
 
 ---
@@ -342,19 +350,49 @@ python3 main.py
 3. Open the dashboard, go to **Settings**, set the WebSocket URL to
    `ws://localhost:8765/ws`, and click **Connect**.
 
-### Ground records and export (S4 — not yet implemented)
+### Ground records and export (S4 — implemented)
 
-Ground recording is **not active** in S3. `recorder.py` is a stub (interface only,
-`NotImplementedError`); no JSONL records are written yet. S4 will:
+Ground recording is **active** in S4. Validated telemetry and event records are
+written as append-only JSONL files into `ground-station/server/data/`
+(git-ignored), one file per mission session.  Recording is independent of
+WebSocket browser connections.
 
-- Write append-only JSONL records into `ground-station/server/data/` (git-ignored),
-  one file per mission session.
-- Export a session to the dashboard's **existing** historical JSON importer shape
-  (see `interface/js/schema.js` `parseSessionFile`):
-  `{ schema_version, mission, launch_ts, launch, telemetry: [], events: [], onboard_records }`.
-- The dashboard's Data Logs page loads the exported JSON via
-  `<input type="file">`, and its session selection, date filters, and CSV export
-  work on it without any frontend schema change.
+**Recording scope:** only `telemetry` and `event` records are written.
+`radio_status` (link frames) and `radio_ack` (ack frames) are **not** recorded
+as ground observations — they are link-state / control messages, not payload
+measurements, and the dashboard's `parseSessionFile` does not expect them in
+the historical export.
+
+**Session lifecycle:**
+* A new session file is created on the first validated record.
+* Filename: `{mission}-{YYYYMMDD}-{HHMMSS}-{epoch_ns}.jsonl` — unique by
+  nanosecond timestamp, safe for any filesystem.
+* **Per-record flush:** each `record()` call writes one JSONL line + `\n` and
+  calls `flush()` synchronously (off the event loop via `asyncio.to_thread`).
+  The line reaches the OS write buffer before the method returns — no
+  background buffering.  Full `fsync()` is called periodically (every 50
+  records) and on `stop()`, so a crash between flushes may lose up to ~50
+  records.
+* **Stop:** `stop()` calls `fsync()` to force data through the OS page cache.
+  On error the exception propagates (never silently swallowed).
+* On restart a new session file is created; old files persist (recoverable).
+* **Append mode:** session files are opened with `"a"` (not `"w"`) so they
+  never truncate existing content.
+
+**Ground receive time (`rx_ts`):** captured at ingestion time in `feed_line()`.
+When the incoming raw message does not contain `rx_ts`, `rx_ts` is set to the
+actual ground receive time (not the flight timestamp).  When `rx_ts` is
+present in the incoming message it is preserved as-is.  Both `rx_ts` and
+`ground_received_at` are stored in the JSONL record.
+
+**Export:** `python3 main.py --export <session>` converts a JSONL session to
+the dashboard's historical JSON shape:
+`{ schema_version, mission, launch_ts, launch, telemetry: [], events: [],
+  onboard_records }`.  Malformed complete lines are skipped with a **warning**;
+the truncated last line is silently ignored.  Output is written atomically
+(exclusive ``os.link()`` from a temp file) to avoid partial exports and never
+overwrites an existing export.  If the output ``.json`` file already exists,
+a ``-1.json`` suffix is used (then ``-2.json``, …) to avoid overwriting.
 
 ---
 
@@ -365,7 +403,7 @@ Ground recording is **not active** in S3. `recorder.py` is a stub (interface onl
 | S1 — Contracts + foundation | **approved** |
 | S2 — WebSocket + fixtures | **approved** |
 | S3 — Serial ingest + recovery | **implemented** (pending review) |
-| S4 — Ground recording + export | not started |
+| S4 — Ground recording + export | **implemented** (pending review) |
 | S5 — Physical integration | not started |
 
 ### S2 implementation notes
@@ -388,8 +426,6 @@ Ground recording is **not active** in S3. `recorder.py` is a stub (interface onl
 connected client receives the hello (unknown state before data) plus all fixture
 frames with correct mapped fields (altitude, temperature, pressure, GPS, mode,
 phase, RSSI, SNR, ACK). A dashboard screenshot is captured for visual review.
-
-**Full suite:** 52/52 automated tests pass (test_protocol 28 + test_websocket 12 + test_serial 12); S3 adds the 12 tests in `test_serial.py`.
 
 **Next authorized action:** S3 (USB serial ingestion and recovery), after S2
 approval.
@@ -436,9 +472,13 @@ approval.
   backoff measurement, queue-overflow reporting, idle-watchdog `lost`
   broadcast + dedup, missing-at-startup, clean shutdown.
 
-**S3 verification:** full suite 52/52 automated tests pass
-(`python3 -m unittest discover -s tests -q`; S3 adds the 12 tests in
-`test_serial.py`). The S3 pass criteria are met for
+**S3 verification:** 52/52 automated tests pass
+(`python3 -m unittest discover -s tests -q`; S3 adds 12 tests in
+`test_serial.py` which require `pyserial` and are excluded when unavailable).
+**Current Python suite (S4):** 106/106 tests pass (S2: 40 + S3 serial: 12 +
+S4 recorder: 54).  Combined with 2 Node.js tests: 108 total checks.
+(Serial tests require `pyserial`; excluded from discover when unavailable.)
+The S3 pass criteria are met for
 the scripted-producer evidence path:
 
 - Well-formed serial messages reach the dashboard unchanged apart from
@@ -461,3 +501,107 @@ reconnect path itself is covered by `test_disconnect_reconnect_resumes_ingest`
 receives it), but the screenshot alone does not prove new telemetry after
 reconnect. No claim is made that this screenshot demonstrates fresh post-reconnect
 telemetry; it documents the observed stale state.
+
+### S4 implementation notes
+
+- `recorder.py` — `Recorder`: append-only JSONL writer with **per-record flush**.
+  Each accepted record is written synchronously (via `asyncio.to_thread`) so the
+  line reaches the OS write buffer before `record()` returns. Full `fsync()`
+  is called periodically (every 50 records) and on `stop()`. No background
+  writer task or unbounded queue is used.
+  - Session files are named `{mission}-{YYYYMMDD}-{HHMMSS}-{epoch_ns}.jsonl` in
+    `data/` — unique by nanosecond timestamp.
+  - Files are opened in **append mode** (`"a"`, not `"w"`) so they never truncate
+    existing content.
+  - Only `telemetry` and `event` messages are recorded (link/ack are control
+    messages, not observations).
+  - `start()` creates the data directory; the first `record()` opens a session
+    file.
+  - `stop()` flushes, calls `fsync()`, and closes the file. Errors propagate.
+  - `record()` after `stop()` raises `RuntimeError` — it never silently opens
+    a new session. An explicit subsequent ``start()`` or a fresh ``Recorder``
+    instance is required to resume recording.
+  - `export(session)` reads the JSONL file **line by line**, processes only
+    newline-terminated complete records, skips malformed lines with a warning,
+    and writes the dashboard-compatible JSON shape atomically using
+    ``os.link()`` (exclusive create).  Never overwrites an existing export;
+    appends ``-1.json``, ``-2.json``, … when the target already exists.
+  - `ground_received_at` is preserved from the ingestion path; `rx_ts` is
+    set from the raw message if present, otherwise to the ground receive time.
+- `websocket_server.py` — `feed_line()` captures **ground receive time** at
+  ingestion.  When the raw message lacks `rx_ts`, `rx_ts` is set to the
+  actual ground receive time; when present it is preserved as-is.
+  Recording happens **before** broadcast. Disk failures raise (never silently
+  presented as success). The recorder is injectable via
+  `WebSocketServer(recorder=...)`.
+  - **Fixture replay is display-only:** replaying fixture lines to a new client
+    does NOT call `feed_line()` and does NOT write to the recorder. This ensures
+    multiple clients don't cause duplicate records.
+  - **Ack frames:** `feed_line()` broadcasts ack frames but never records them
+    (they are link-state / control messages, not observations).
+- `main.py` — `--export <session>` CLI flag for standalone export. The recorder
+  is started/stopped in the main lifecycle. The `--mission` config value is
+  passed to the recorder via `set_mission()`. If WS startup or serial startup
+  fails, the recorder is stopped and the exception propagates.
+- `tests/test_recorder.py` — 54 tests covering: immediate write (line on disk
+  before record() returns), append mode, unique filenames, malformed input
+  rejection, partial final line recovery, export contract (exact shape, preserved
+  timestamps/seq/RSSI/SNR, sorted by seq, no invented onboard_records), no-viewer
+  recording, fixture replay (no duplication, no fake RF metadata), **two clients
+  zero duplicate records**, `record()` after stop raises RuntimeError,
+  `stop()` fsync error propagation, ground receive time capture,
+  ack-not-recorded-through-feed-line, and event rx_ts preservation.
+- `fixtures/` — synthetic test fixtures (clearly labelled, not real flight data):
+  - `sample.jsonl` — 8-line S2 fixture (telemetry/events/radio_status/radio_ack)
+  - `synthetic_flight.jsonl` — 5-line synthetic flight (prelaunch→ascent→burst→descent)
+  - `synthetic_flight.json` — expected export shape for the synthetic flight
+
+**S4 acceptance criteria:**
+- [x] Recorded data exists after a normal restart and earlier complete
+  records can be read following a simulated interrupted write.
+- [x] Exported JSON loads in the dashboard without any frontend schema
+  change (verified by Node.js dynamic-import test of `parseSessionFile`
+  against both the fixture and a live Python recorder export).
+- [x] UI verification of Data Logs import, session selection, date
+  filters, and CSV export: **verified** via headless Chrome screenshot.
+- [x] Sample synthetic session fixture: `fixtures/synthetic_flight.jsonl`
+  and `fixtures/synthetic_flight.json` — clearly labelled synthetic.
+
+**S4 test counts (S4-only, `tests/test_recorder.py`):** 54 tests pass.
+Full Python suite (protocol 28 + websocket 12 + serial 12 + recorder 54): 106 tests pass.
+Combined with 2 Node.js tests: 108 total checks.
+(Serial tests require `pyserial`; excluded from discover when unavailable.)
+
+**flush vs fsync:** `record()` calls `f.flush()` after each line so the OS
+is notified immediately.  `stop()` calls `f.flush()` + `os.fsync()` to force
+data through the OS page cache.  Additionally, every 50 records a periodic
+`fsync()` is called (configurable via `fsync_interval`).  No background
+buffering — the line reaches the OS write buffer before `record()` returns
+(full fsync is periodic, not per-line).
+
+**recording scope:** only `telemetry` and `event` records are written.
+`radio_status` (link frames) and `radio_ack` (ack frames) are **not**
+recorded as ground observations — they are link-state / control messages.
+
+**ground_received_at:** captured at ingestion time in `feed_line()`.
+When the incoming message does not contain `rx_ts`, `rx_ts` is set to the
+actual ground receive time (not the flight timestamp).  When `rx_ts` is
+present in the incoming message it is preserved as-is.  Both `rx_ts` and
+`ground_received_at` are stored in the JSONL record.
+
+**no silent writes:** if a write fails, the exception is logged and
+re-raised.  A `record()` call that fails is **never** silently treated
+as successful; the caller must decide whether to abort the server or
+continue.
+
+**filename:** `{mission}-{YYYYMMDD}-{HHMMSS}-{epoch_ns}.jsonl` — unique
+by nanosecond timestamp, human-readable, safe for any filesystem.  Mission
+name is sanitized (no `/`, `\`, `.`, `\x00`).  Files are opened with
+`O_EXCL` to prevent collisions.
+
+**export CLI path policy:** `python3 main.py --export <session>` accepts
+either a session stem (looked up in `data_dir/`) or a path ending
+in `.jsonl` (absolute paths are allowed only when they resolve inside
+`data_dir`; paths escaping via ``..`` are rejected).  Output ``.json`` is
+written next to the ``.jsonl`` file.  If the output already exists, a
+numbered suffix is appended to avoid overwriting.

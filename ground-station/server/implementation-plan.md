@@ -4,7 +4,7 @@
 **Target branch:** `feature/ground-station`  
 **Repository:** `/Users/anuragkoushik/Desktop/Proj/Capstone-ECE-Balloon-Bot`  
 **Implementation directory:** `ground-station/server/`  
-**Status:** **S3 — USB serial ingestion and recovery** (implemented, pending review)  
+**Status:** **S4 — Durable ground recording and session export** (implemented, pending review)
 **Scope:** Python ground-station server only; ESP32 and STM32 firmware are separate workstreams.
 
 ---
@@ -337,9 +337,9 @@ Additional rules:
 |---|---|---|---|
 | S1 — Contracts + foundation | Done | Approved | README.md §4–7; S1 report |
 | S2 — WebSocket + fixtures | Done | Approved | 40 tests (test_protocol 28 + test_websocket 12) |
-| S3 — Serial ingest + recovery | Implemented | Pending | `tests/test_serial.py` (scripted producer); console logs; full suite 52 tests pass (S3 adds 12) |
-| S4 — Ground recording + export | Not started | Pending | — |
+| S3 — Serial ingest + recovery | Implemented | Pending | `tests/test_serial.py` (12 tests, requires `pyserial`); S3 verification: 52 tests pass (S2: 40 + S3 serial: 12). Current full suite (S4): 106 Python tests + 2 Node.js = 108 total |
+| S4 — Ground recording + export | Implemented | Pending | `tests/test_recorder.py` (54 tests); Node.js tests (2 tests); full Python suite 106 tests (S2: 40 + S3 serial: 12 + S4 recorder: 54), 108 total with JS |
 | S5 — Physical integration | Not started | Pending | — |
 
-**Next authorized action:** S3 review. S4 (durable ground recording) starts
-only after S3 approval.
+**Next authorized action:** S4 review. S5 (physical integration with real ESP32/STM32 hardware) starts
+only after S4 approval.

@@ -6,8 +6,8 @@ current mission state). Broadcast does not block on a slow/disconnected client,
 so one bad browser cannot stall serial ingestion or recording.
 
 The ``feed_line`` method is the single ingestion path: one newline-terminated
-serial/fixture line -> parse -> validate -> translate -> broadcast. The same
-path is used for serial input (S3) and fixture input (S2).
+serial/fixture line -> parse -> validate -> translate -> record -> broadcast.
+The same path is used for serial input (S3) and fixture input (S2).
 """
 
 from __future__ import annotations
@@ -22,11 +22,13 @@ from websockets.asyncio.server import serve
 
 from protocol import (
     SCHEMA_VERSION,
+    _parse_iso_ms,
     encode_ws_message,
     parse_serial_line,
     to_ws_message,
     validate,
 )
+from recorder import Recorder
 
 log = logging.getLogger("websocket_server")
 
@@ -89,7 +91,8 @@ class WebSocketServer:
     def __init__(self, host: str = "127.0.0.1", port: int = 8765,
                  state: Optional[MissionState] = None,
                  fixture_lines: Optional[list] = None,
-                 send_timeout: float = SEND_TIMEOUT_S):
+                 send_timeout: float = SEND_TIMEOUT_S,
+                 recorder: Optional[Recorder] = None):
         self.host = host
         self.port = port
         self.state = state if state is not None else MissionState()
@@ -97,8 +100,9 @@ class WebSocketServer:
         self._server = None
         self._fixture_lines = fixture_lines
         self.send_timeout = send_timeout
+        self.recorder = recorder
         self.stats = {"received": 0, "rejected": 0, "broadcast": 0,
-                      "clients": 0, "dropped": 0}
+                      "clients": 0, "dropped": 0, "recorded": 0}
         # Rejection-log rate-limiting state.
         self._reject_count = 0
         self._reject_last_log = 0.0
@@ -141,9 +145,13 @@ class WebSocketServer:
     async def _replay_fixture(self, websocket) -> None:
         """Replay the fixture lines to a single newly-connected client.
 
-        This is a deterministic replay of recorded lines (not a telemetry
-        simulator), so any client — including a browser opening the dashboard
+        This is a **display-only** replay of recorded lines (not a telemetry
+        simulator) so any client — including a browser opening the dashboard
         after startup — receives the fixture data.
+
+        **Important:** replay does NOT call ``feed_line`` and does NOT write
+        to the recorder. Each replay is purely for the benefit of the newly
+        connected dashboard client.
         """
         if not self._fixture_lines:
             return
@@ -159,7 +167,11 @@ class WebSocketServer:
             await websocket.send(encode_ws_message(frame))
 
     async def feed_line(self, line: bytes) -> bool:
-        """Run one line through parse -> validate -> translate -> broadcast.
+        """Run one line through parse -> validate -> translate -> record -> broadcast.
+
+        Recording happens **before** broadcast so that a disk failure is
+        never silently presented as a successfully recorded packet.  If
+        recording fails the exception propagates (never swallowed).
 
         Returns True if the line was accepted and broadcast, False if rejected
         (malformed / invalid). A rejected line is counted, never raised.
@@ -188,8 +200,55 @@ class WebSocketServer:
             self.stats["received"] += 1
             await self.set_link_state(frame.get("radio"))
             return True
-        self.state.update(frame)
+        if frame["type"] == "ack":
+            # Ack frames are control messages — broadcast but never record.
+            self.stats["received"] += 1
+            await self.broadcast(encode_ws_message(frame))
+            return True
+        # Capture ground receive time at ingestion.
+        ground_ts = datetime.now(timezone.utc).isoformat()
+        if frame["type"] == "telemetry":
+            # Preserve incoming rx_ts if the sender provided it AND it is
+            # a valid ISO timestamp; otherwise use ground receive time.
+            # validate() falls back to flight ts when rx_ts is invalid —
+            # we must not let that leak through as the ground rx_ts.
+            raw_rx_ts_valid = ("rx_ts" in raw
+                               and _parse_iso_ms(raw["rx_ts"]) is not None)
+            if not raw_rx_ts_valid:
+                frame = dict(frame)
+                frame["rx_ts"] = ground_ts
+            frame["ground_received_at"] = ground_ts
+            recorder_frame = frame
+        elif frame["type"] == "event":
+            # The event validator does not carry rx_ts through,
+            # so we restore it from the raw message when present.
+            # Broadcast the same corrected rx_ts.
+            raw_rx_ts_valid = ("rx_ts" in raw
+                               and _parse_iso_ms(raw["rx_ts"]) is not None)
+            if raw_rx_ts_valid:
+                frame = dict(frame)
+                frame["rx_ts"] = raw["rx_ts"]
+            else:
+                frame = dict(frame)
+                frame["rx_ts"] = ground_ts
+            frame["ground_received_at"] = ground_ts
+            recorder_frame = frame
         self.stats["received"] += 1
+        # Record before broadcast — disk failure is explicit.
+        if self.recorder is not None:
+            try:
+                await self.recorder.record(recorder_frame)
+                self.stats["recorded"] += 1
+            except OSError as exc:
+                log.error("recording failed (disk error?): %s — packet NOT recorded", exc)
+                raise
+            except RuntimeError as exc:
+                # record() after stop() — propagate so main.py can shut down.
+                log.error("recording failed: %s — packet NOT recorded", exc)
+                raise
+        # Update MissionState only after successful recording so the
+        # tracked state stays consistent with what is actually persisted.
+        self.state.update(frame)
         await self.broadcast(encode_ws_message(frame))
         return True
 
@@ -202,7 +261,7 @@ class WebSocketServer:
 
         The first rejection in a quiet window is logged immediately at INFO
         (visible at the default log level). Subsequent rejections within the
-        window are counted silently — no per-line log flood. When a rejection
+        window are counted silently — no per-line log. When a rejection
         arrives after ``REJECT_LOG_WINDOW_S`` seconds elapse, a summary of the
         accumulated count is logged before this line's first failure.
         """

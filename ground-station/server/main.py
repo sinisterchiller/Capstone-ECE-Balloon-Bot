@@ -1,7 +1,9 @@
 """main.py — CLI entry point for the ground-station server.
 
-S3: WebSocket server + fixture input + USB serial ingestion (SerialLink).
-The recorder is an S4 stub. Default binding is loopback-only (127.0.0.1) and
+S4: WebSocket server + recorder + fixture input + USB serial ingestion
+(SerialLink).  The recorder writes validated telemetry/events to append-only
+JSONL files and supports ``--export`` to convert a session to the dashboard's
+historical JSON shape.  Default binding is loopback-only (127.0.0.1) and
 no physical hardware is required.
 
 Run:
@@ -9,6 +11,7 @@ Run:
     python3 main.py                                   # WS server only (browsers connect)
     python3 main.py --fixture fixtures/sample.jsonl   # replay a fixture, then keep serving
     python3 main.py --serial-port /dev/cu.usbmodem1401 --baud 115200   # serial ingestion
+    python3 main.py --export my-session               # export a session to JSON
 """
 
 from __future__ import annotations
@@ -23,6 +26,7 @@ from typing import Optional
 
 from fixture_source import FixtureSource
 from protocol import READ_TIMEOUT_S
+from recorder import Recorder
 from serial_link import SerialLink
 from websocket_server import MissionState, WebSocketServer
 
@@ -43,6 +47,7 @@ class Config:
     log_level: str = "INFO"
     fixture: str | None = None
     mission: str = "Balloon Bot"
+    export: str | None = None
 
 
 def parse_args(argv: list[str] | None = None) -> Config:
@@ -75,6 +80,11 @@ def parse_args(argv: list[str] | None = None) -> Config:
                              "(offline, deterministic; no hardware required)")
     parser.add_argument("--mission", default="Balloon Bot",
                         help="mission name for the hello frame (default 'Balloon Bot')")
+    parser.add_argument("--export", default=None,
+                        help="export a JSONL session to dashboard JSON shape. "
+                             "Accepts a session filename stem (without .jsonl) "
+                             "or a full path ending in .jsonl. Writes .json to "
+                             "the same directory.")
     args = parser.parse_args(argv)
     return Config(
         host=args.host,
@@ -85,19 +95,40 @@ def parse_args(argv: list[str] | None = None) -> Config:
         log_level=args.log_level,
         fixture=args.fixture,
         mission=args.mission,
+        export=args.export,
     )
 
 
-async def ingest_loop(server: WebSocketServer, link: SerialLink) -> None:
+async def ingest_loop(server: WebSocketServer, link: SerialLink,
+                      ingest_failed: asyncio.Event | None = None) -> None:
     """Consume serial lines into the S2 ingestion path (``feed_line``).
 
     Serial I/O is off the event loop inside ``SerialLink`` (dedicated reader
     thread + bounded queue); this task only moves complete lines through
-    parse -> validate -> translate -> broadcast. Terminates when the link
-    is stopped (sentinel).
+    parse -> validate -> translate -> record -> broadcast.
+
+    **Error handling:** if ``feed_line`` raises (e.g. disk error from the
+    recorder), the exception is logged, the serial link is stopped (which
+    signals the watchdog to exit), the ``ingest_failed`` event is set so the
+    main loop can shut down, and the exception is re-raised so the caller's
+    shutdown sequence runs and exits with non-zero status.
+    The server never continues with a dead ingest task.
+
+    When ``ingest_failed`` is omitted (e.g. in tests), a local ``asyncio.Event``
+    is created so the exception handler still works; the production path
+    (``run``) passes the explicit event shared with the main loop.
     """
-    async for line in link.lines():
-        await server.feed_line(line)
+    if ingest_failed is None:
+        ingest_failed = asyncio.Event()
+    try:
+        async for line in link.lines():
+            await server.feed_line(line)
+    except Exception:
+        log = logging.getLogger("main")
+        log.exception("ingest_loop failed — shutting down")
+        ingest_failed.set()
+        await link.stop()
+        raise
 
 
 async def link_watchdog(server: WebSocketServer, link: SerialLink,
@@ -131,38 +162,87 @@ async def link_watchdog(server: WebSocketServer, link: SerialLink,
 async def run(config: Config) -> None:
     """Orchestrate the server.
 
-    S3: starts the WebSocket server and, when ``--serial-port`` is given, the
-    serial link (reader thread) plus the ingestion and link-watchdog tasks.
-    Fixture mode replays a fixture through the same ingestion path. The
-    server keeps running afterwards so browsers can connect and receive the
-    per-client hello.
+    S3/S4: starts the WebSocket server, recorder, and, when ``--serial-port``
+    is given, the serial link (reader thread) plus the ingestion and
+    link-watchdog tasks.  Fixture mode replays a fixture through the same
+    ingestion path.  The server keeps running afterwards so browsers can
+    connect and receive the per-client hello.
+
+    When ``--export`` is given instead of ``--serial-port``, the server
+    starts only long enough to export the named session and exits.
     """
     log = logging.getLogger("main")
     state = MissionState(mission=config.mission)
+
+    # ---- Export-only mode (S4) ----------------------------------------
+    if config.export:
+        rec = Recorder(config.data_dir)
+        await rec.start()
+        try:
+            out = rec.export(config.export)
+            print(f"Exported session to {out}")
+        finally:
+            await rec.stop()
+        return
+
+    # ---- Normal server mode -------------------------------------------
     fixture_lines = None
     if config.fixture:
         fixture_lines = FixtureSource.from_file(Path(config.fixture))._lines
         log.info("Fixture mode: %s (%d lines) — replayed to each new client",
                  config.fixture, len(fixture_lines))
-    server = WebSocketServer(config.host, config.port, state, fixture_lines)
-    await server.start()
+
+    recorder = Recorder(config.data_dir)
+    await recorder.start()
+    # Pass the actual mission name from Config into the recorder so session
+    # metadata and filenames use the real mission, not "unknown".
+    recorder.set_mission(config.mission)
+
+    server = WebSocketServer(config.host, config.port, state, fixture_lines,
+                             recorder=recorder)
+    try:
+        await server.start()
+    except OSError as exc:
+        log.error("WebSocket server failed to start: %s — shutting down", exc)
+        await recorder.stop()
+        raise
 
     link: Optional[SerialLink] = None
     tasks: list[asyncio.Task] = []
+    ingest_task: Optional[asyncio.Task] = None
+    ingest_exc: Optional[BaseException] = None
+
+    # Event set when ingest_loop encounters a fatal error (e.g. disk failure).
+    # Allows the main loop to exit its wait and run the shutdown sequence.
+    ingest_failed = asyncio.Event()
+
     if config.serial_port:
         link = SerialLink(config.serial_port, config.baud)
-        await link.start()
-        tasks = [
-            asyncio.create_task(ingest_loop(server, link), name="ingest"),
-            asyncio.create_task(link_watchdog(server, link), name="watchdog"),
-        ]
+        try:
+            await link.start()
+        except OSError as exc:
+            log.error("Serial link failed to start: %s — shutting down", exc)
+            await server.stop()
+            await recorder.stop()
+            raise
+        ingest_task = asyncio.create_task(
+            ingest_loop(server, link, ingest_failed), name="ingest")
+        tasks.append(
+            asyncio.create_task(link_watchdog(server, link), name="watchdog"))
 
     log.info("Server ready. Open the dashboard, set the WebSocket URL to "
              "ws://%s:%d/ws, and click Connect. Ctrl-C to stop.",
              config.host, server.bound_port)
+
     try:
-        await asyncio.Event().wait()  # run until cancelled
+        await asyncio.wait_for(
+            ingest_failed.wait(),
+            timeout=None,  # blocks until the event fires (ingest error)
+        )
+    except asyncio.TimeoutError:
+        pass  # event never fired — normal run, will be cancelled on Ctrl-C
     except asyncio.CancelledError:
+        # ingest_loop raised; exception captured when we gather below.
         pass
     finally:
         # Stop the serial link first: its sentinel terminates ingest_loop,
@@ -171,8 +251,27 @@ async def run(config: Config) -> None:
             await link.stop()
         for t in tasks:
             t.cancel()
+        if ingest_task is not None:
+            try:
+                await ingest_task
+            except BaseException as exc:
+                # Only record real errors; CancelledError from Ctrl-C
+                # shutdown is normal and must not be re-raised.
+                if not isinstance(exc, asyncio.CancelledError):
+                    ingest_exc = exc
         await asyncio.gather(*tasks, return_exceptions=True)
         await server.stop()
+        # Flush and close the recorder last so all remaining records are
+        # written to disk before the server shuts down. Errors propagate.
+        await recorder.stop()
+    if ingest_exc is not None:
+        raise ingest_exc from None
+    # Surface watchdog unexpected failure if present.
+    for t in tasks:
+        if t.done() and not t.cancelled():
+            exc = t.exception()
+            if exc is not None:
+                raise exc from None
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -180,7 +279,14 @@ def main(argv: list[str] | None = None) -> int:
     config = parse_args(argv)
     logging.basicConfig(level=config.log_level,
                         format="%(asctime)s %(levelname)s %(name)s: %(message)s")
-    asyncio.run(run(config))
+    try:
+        asyncio.run(run(config))
+    except Exception as exc:
+        # Catch only real errors (not KeyboardInterrupt / CancelledError
+        # from Ctrl-C) so the process exits with non-zero status and a
+        # log line.  KeyboardInterrupt propagates naturally with exit 1.
+        logging.error("Server exited with error: %s", exc)
+        return 1
     return 0
 
 
