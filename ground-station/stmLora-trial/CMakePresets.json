@@ -1,0 +1,75 @@
+{
+    "version": 3,
+    "configurePresets": [
+        {
+            "name": "default",
+            "hidden": true,
+            "generator": "Ninja",
+            "binaryDir": "${sourceDir}/build"
+        },
+        {
+            "name": "Debug",
+            "description": "Source-controlled — role/TX from Inc/app_build_config.h (default: Responder/TX-on)",
+            "inherits": "default",
+            "binaryDir": "${sourceDir}/build/Debug",
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "Debug",
+                "APP_CONFIG_FROM_SOURCE": "ON"
+            }
+        },
+        {
+            "name": "Release",
+            "description": "Release — Initiator role, TX disabled (safe)",
+            "inherits": "default",
+            "binaryDir": "${sourceDir}/build/Release",
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "Release",
+                "APP_ROLE_INITIATOR": "1",
+                "APP_TX_ENABLED": "0",
+                "APP_CONFIG_FROM_SOURCE": "OFF"
+            }
+        },
+        {
+            "name": "InitiatorTx",
+            "description": "Initiator role with TX enabled — for field testing",
+            "inherits": "default",
+            "binaryDir": "${sourceDir}/build/InitiatorTx",
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "Debug",
+                "APP_ROLE_INITIATOR": "1",
+                "APP_TX_ENABLED": "1",
+                "APP_CONFIG_FROM_SOURCE": "OFF"
+            }
+        },
+        {
+            "name": "ResponderTx",
+            "description": "Responder role with TX enabled — for field testing",
+            "inherits": "default",
+            "binaryDir": "${sourceDir}/build/ResponderTx",
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "Debug",
+                "APP_ROLE_INITIATOR": "0",
+                "APP_TX_ENABLED": "1",
+                "APP_CONFIG_FROM_SOURCE": "OFF"
+            }
+        }
+    ],
+    "buildPresets": [
+        {
+            "name": "Debug",
+            "configurePreset": "Debug"
+        },
+        {
+            "name": "Release",
+            "configurePreset": "Release"
+        },
+        {
+            "name": "InitiatorTx",
+            "configurePreset": "InitiatorTx"
+        },
+        {
+            "name": "ResponderTx",
+            "configurePreset": "ResponderTx"
+        }
+    ]
+}
