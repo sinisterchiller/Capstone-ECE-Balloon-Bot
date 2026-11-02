@@ -67,13 +67,34 @@ export function renderLogs(root) {
     return { items: s.packets.items, label: 'Ground-received (live)', onboard: null };
   }
 
+  /** Apply search + date filters to *items* and return the filtered array. */
+  function applyFilters(items) {
+    const filter = searchInput.value.toLowerCase().trim();
+    const from = fromInput.value ? Date.parse(fromInput.value) : null;
+    const to = toInput.value ? Date.parse(toInput.value) : null;
+    const out = [];
+    for (const p of items) {
+      if (!p) continue;
+      if (filter) {
+        const str = `${p.seq} ${p.ts ?? ''} ${p.mode} ${p.phase || ''} ${p.lat ?? ''} ${p.lon ?? ''}`.toLowerCase();
+        if (!str.includes(filter)) continue;
+      }
+      const t = p.rx_ts ?? p.ts;
+      if (from != null && Number.isFinite(t) && t < from) continue;
+      if (to != null && Number.isFinite(t) && t > to) continue;
+      out.push(p);
+    }
+    return out;
+  }
+
   function exportCSV() {
-    const packets = active().items;
-    if (packets.length === 0) return;
+    const allItems = active().items;
+    const filtered = applyFilters(allItems);
+    if (filtered.length === 0) return;
 
     const headers = ['seq', 'ts', 'rx_ts', 'lat', 'lon', 'alt', 'temp_ext', 'pressure', 'battery', 'battery_pct', 'mode', 'phase', 'rssi', 'snr', 'fix'];
     const rows = [headers.join(',')];
-    for (const p of packets) {
+    for (const p of filtered) {
       rows.push(headers.map(h => {
         const v = p[h];
         if (v == null) return '';
@@ -96,24 +117,24 @@ export function renderLogs(root) {
     const items = src.items;
     const cap = Math.max(1, s.settings.logRowCap || 2000);
 
+    // Rebuild the session dropdown whenever there are loaded sessions,
+    // so it stays in sync even when sessions are loaded outside importFile().
+    const optLive = '<option value="live">Live Session</option>';
+    const optSessions = s.loadedSessions
+      .map(e => `<option value="${e.id}">${e.session.name}</option>`)
+      .join('');
+    sessionSelect.innerHTML = optLive + optSessions;
+
+    // Sync the select value to the active session (only when not live).
+    // Guard against triggering the change handler during initial render
+    // or when the value is already correct.
+    if (s.activeSessionId !== 'live') {
+      sessionSelect.value = s.activeSessionId;
+    }
+
     totalEl.textContent = items.length;
 
-    const filter = searchInput.value.toLowerCase().trim();
-    const from = fromInput.value ? Date.parse(fromInput.value) : null;
-    const to = toInput.value ? Date.parse(toInput.value) : null;
-
-    let filtered = [];
-    for (const p of items) {
-      if (!p) continue;
-      if (filter) {
-        const str = `${p.seq} ${p.ts ?? ''} ${p.mode} ${p.phase || ''} ${p.lat ?? ''} ${p.lon ?? ''}`.toLowerCase();
-        if (!str.includes(filter)) continue;
-      }
-      const t = p.rx_ts ?? p.ts;
-      if (from != null && Number.isFinite(t) && t < from) continue;
-      if (to != null && Number.isFinite(t) && t > to) continue;
-      filtered.push(p);
-    }
+    const filtered = applyFilters(items);
 
     countEl.textContent = filtered.length;
 
@@ -165,11 +186,6 @@ export function renderLogs(root) {
       const id = `s${Date.now()}`;
       store.loadSession(parsed, id);
       store.setActiveSession(id);
-      sessionSelect.innerHTML =
-        '<option value="live">Live Session</option>' +
-        s.loadedSessions.map(e =>
-          `<option value="${e.id}">${e.session.name}</option>`).join('');
-      sessionSelect.value = id;
       render();
     });
   }
