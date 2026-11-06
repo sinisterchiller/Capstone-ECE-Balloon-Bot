@@ -6,8 +6,12 @@ translates messages into the **existing dashboard's exact WebSocket contract**,
 and broadcasts live data to connected dashboard clients. Local mission
 recording is implemented in S4.
 
-**Stage status:** **S3 — USB serial ingestion and recovery, implemented pending review**; **S4 — Ground recording + export, implemented pending review**.
-Stages S5 is not yet implemented; see [implementation-plan.md](implementation-plan.md).
+**Stage status:** **S1–S4 code work is complete** — all non-hardware server
+stages (contracts, WebSocket delivery, serial ingestion, ground recording +
+export) are implemented and the full automated suite passes (108 Python tests).
+**S5 — physical integration** remains the only outstanding stage and is
+**blocked on real ESP32-S3/STM32 hardware**; no hardware validation is claimed.
+See [implementation-plan.md](implementation-plan.md).
 
 ---
 
@@ -42,11 +46,26 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-`requirements.txt` currently lists lower bounds (`pyserial`, `websockets`); exact
-versions will be pinned after the S2–S4 tests pass.
+`requirements.txt` pins the exact versions verified in the development
+environment: `pyserial==3.5` and `websockets==17.3` (Python 3.11+).
 
 S3 verification uses a scripted serial producer; no physical ESP32-S3 is
 required for this stage. The server also runs without hardware using fixtures.
+
+### Running the tests
+
+The full suite is 108 Python tests. Run it from `ground-station/server`:
+
+```bash
+../.venv/bin/python -m pytest -q          # 108 passed
+# or, without the project venv:
+python3 -m pytest -q
+python3 -m unittest discover -s tests -q   # also works
+```
+
+The serial tests (`tests/test_serial.py`) and the end-to-end test
+(`tests/test_e2e.py`) require `pyserial` and `websockets`; install
+`requirements.txt` before running the suite.
 
 ---
 
@@ -400,11 +419,15 @@ a ``-1.json`` suffix is used (then ``-2.json``, …) to avoid overwriting.
 
 | Stage | Status |
 |---|---|
-| S1 — Contracts + foundation | **approved** |
-| S2 — WebSocket + fixtures | **approved** |
-| S3 — Serial ingest + recovery | **implemented** (pending review) |
-| S4 — Ground recording + export | **implemented** (pending review) |
-| S5 — Physical integration | not started |
+| S1 — Contracts + foundation | **complete** (approved) |
+| S2 — WebSocket + fixtures | **complete** (approved) |
+| S3 — Serial ingest + recovery | **complete** (all automated checks pass) |
+| S4 — Ground recording + export | **complete** (all automated checks pass) |
+| S5 — Physical integration | **blocked on real ESP32-S3/STM32 hardware** (no hardware validation claimed) |
+
+All non-hardware server work (S1–S4) is complete and the full automated suite
+passes (108 Python tests). S5 is the only remaining stage and requires
+physical hardware; no hardware validation is claimed.
 
 ### S2 implementation notes
 
@@ -427,8 +450,8 @@ connected client receives the hello (unknown state before data) plus all fixture
 frames with correct mapped fields (altitude, temperature, pressure, GPS, mode,
 phase, RSSI, SNR, ACK). A dashboard screenshot is captured for visual review.
 
-**Next authorized action:** S3 (USB serial ingestion and recovery), after S2
-approval.
+**Next authorized action (historical, S2 era):** S3 (USB serial ingestion and
+recovery), after S2 approval. S3 and S4 are now complete.
 
 ### S3 implementation notes
 
@@ -474,10 +497,12 @@ approval.
 
 **S3 verification:** 52/52 automated tests pass
 (`python3 -m unittest discover -s tests -q`; S3 adds 12 tests in
-`test_serial.py` which require `pyserial` and are excluded when unavailable).
+`test_serial.py`, which require `pyserial` and `websockets`; install
+`requirements.txt` before running the suite).
 **Current Python suite (S4):** 106/106 tests pass (S2: 40 + S3 serial: 12 +
 S4 recorder: 54).  Combined with 2 Node.js tests: 108 total checks.
-(Serial tests require `pyserial`; excluded from discover when unavailable.)
+(Serial tests require `pyserial` and `websockets`; install `requirements.txt`
+before running the suite.)
 The S3 pass criteria are met for
 the scripted-producer evidence path:
 
@@ -568,9 +593,18 @@ telemetry; it documents the observed stale state.
   and `fixtures/synthetic_flight.json` — clearly labelled synthetic.
 
 **S4 test counts (S4-only, `tests/test_recorder.py`):** 54 tests pass.
-Full Python suite (protocol 28 + websocket 12 + serial 12 + recorder 54): 106 tests pass.
-Combined with 2 Node.js tests: 108 total checks.
-(Serial tests require `pyserial`; excluded from discover when unavailable.)
+Full Python suite (protocol 28 + websocket 12 + serial 12 + recorder 54 +
+end-to-end 2): 108 tests pass.
+Combined with 2 Node.js tests: 110 total checks.
+(Serial and end-to-end tests require `pyserial` and `websockets`; install
+`requirements.txt` before running the suite.)
+
+**End-to-end integration (`tests/test_e2e.py`):** 2 tests exercising the full
+production path (scripted serial -> `SerialLink` -> `main.ingest_loop` ->
+`WebSocketServer.feed_line` -> WS client + `Recorder` JSONL on disk ->
+`Recorder.export()`). One test proves a connected client receives the `hello`
+and translated telemetry frames while recording to disk; the other proves
+recording continues with zero clients connected.
 
 **flush vs fsync:** `record()` calls `f.flush()` after each line so the OS
 is notified immediately.  `stop()` calls `f.flush()` + `os.fsync()` to force

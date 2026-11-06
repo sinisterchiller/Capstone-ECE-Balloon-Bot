@@ -4,7 +4,11 @@
 **Target branch:** `feature/ground-station`  
 **Repository:** `/Users/anuragkoushik/Desktop/Proj/Capstone-ECE-Balloon-Bot`  
 **Implementation directory:** `ground-station/server/`  
-**Status:** **S4 — Durable ground recording and session export** (implemented, pending review)
+**Status:** **S1–S4 complete** — all non-hardware server work (contracts,
+WebSocket delivery, serial ingestion, ground recording + export) is
+implemented and the full automated suite passes (108 Python tests). **S5 —
+physical integration** is the only remaining stage and is blocked on real
+ESP32-S3/STM32 hardware (no hardware validation is claimed).
 **Scope:** Python ground-station server only; ESP32 and STM32 firmware are separate workstreams.
 
 ---
@@ -63,7 +67,9 @@ STM32 payload  --915 MHz LoRa-->  ESP32-S3 ground receiver
 - `pyserial` for serial reads.
 - `websockets` for WebSocket clients (`websockets.asyncio` API where supported by the pinned version).
 - Python standard library for `asyncio`, `argparse`, `threading`/`asyncio.to_thread`, `json`, `logging`, `datetime`, `pathlib`, and `unittest`.
-- Pin compatible dependency versions after the environment is installed and the tests pass; avoid unnecessary packages.
+- Dependencies are pinned in `requirements.txt` to the versions verified in
+  `ground-station/.venv`: `pyserial==3.5`, `websockets==17.3` (Python 3.11+).
+  No unnecessary packages are introduced.
 
 ### Initial operating defaults (provisional, not a verified hardware contract)
 
@@ -337,9 +343,11 @@ Additional rules:
 |---|---|---|---|
 | S1 — Contracts + foundation | Done | Approved | README.md §4–7; S1 report |
 | S2 — WebSocket + fixtures | Done | Approved | 40 tests (test_protocol 28 + test_websocket 12) |
-| S3 — Serial ingest + recovery | Implemented | Pending | `tests/test_serial.py` (12 tests, requires `pyserial`); S3 verification: 52 tests pass (S2: 40 + S3 serial: 12). Current full suite (S4): 106 Python tests + 2 Node.js = 108 total |
-| S4 — Ground recording + export | Implemented | Pending | `tests/test_recorder.py` (54 tests); Node.js tests (2 tests); full Python suite 106 tests (S2: 40 + S3 serial: 12 + S4 recorder: 54), 108 total with JS |
+| S3 — Serial ingest + recovery | Complete | Pending | `tests/test_serial.py` (12 tests, requires `pyserial`); S3 verification: 52 tests pass (S2: 40 + S3 serial: 12). Full suite (final): 108 Python tests + 2 Node.js = 110 total |
+| S4 — Ground recording + export | Complete | Pending | `tests/test_recorder.py` (54 tests) + `tests/test_e2e.py` (2 end-to-end tests); Node.js tests (2 tests); full Python suite 108 tests (S2: 40 + S3 serial: 12 + S4 recorder: 54 + e2e: 2), 110 total with JS |
 | S5 — Physical integration | Not started | Pending | — |
 
-**Next authorized action:** S4 review. S5 (physical integration with real ESP32/STM32 hardware) starts
-only after S4 approval.
+**Next authorized action:** S5 — physical integration (requires real
+ESP32-S3/STM32 hardware). S1–S4 implementation and automated verification are
+complete (108 Python tests; S3/S4 remain pending formal review sign-off). No
+hardware validation is claimed.
