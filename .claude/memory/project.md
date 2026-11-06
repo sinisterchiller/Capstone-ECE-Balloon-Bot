@@ -12,6 +12,8 @@ Client: Prof. Yize Chen. Flight targets: 30–100 m initial test flights; design
 - Target: ≥95% packet delivery during testing.
 - GNSS: 1 s position/altitude recording when 3D fix available.
 
-## Current state (2026-10-21)
-- `interface/plan.md` written (full dashboard spec).
-- No dashboard code yet; `server/` and `esp/` empty.
+## Current state (2026-11-06)
+- **Dashboard: complete** — seven pages in `ground-station/interface/`, six implementation steps approved 2026-10-22; temporary verification harnesses cleaned up (commit `c320e95`). No further interface changes without a new plan.
+- **Ground server: S1–S4 non-hardware work complete** (contracts, WebSocket delivery, serial ingest, recording/export); dependencies pinned, end-to-end tests added, 108/108 tests pass; S5 real-hardware integration not started.
+- **STM32: LoRa ping-pong firmware (`stmLora-trial/`) builds for three presets and works on real hardware** (user-confirmed 2026-11-05) at 470 MHz (NUCLEO-WL55JC2 band). The 915 MHz flight band remains unvalidated.
+- **ESP32-S3 firmware (`esp/`) and the flight payload firmware are not started.**
