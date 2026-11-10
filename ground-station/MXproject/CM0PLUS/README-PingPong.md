@@ -66,6 +66,7 @@ described in 5.4 and 7; it also applies to the CPU2-only build context.
 | SUBGHZ radio + SUBGHZSPI + RF switch (PC3/PC4/PC5) | CPU2 | `SUBGHZ_Radio_IRQn` (IRQ 31 on CPU2, 50 on CPU1); `HAL_SUBGHZ_Init()` unmasks the radio IRQ for CPU2 through `LL_C2_EXTI_EnableIT_32_63(LL_EXTI_LINE_44)` |
 | RTC (UTIL_TIMER / HAL time base) | CPU2 | CPU2 has one combined RTC vector `RTC_LSECSS_IRQn`; the HAL enables `EXTI->C2IMR1` for alarm A. CPU1 must not use the RTC while this image runs |
 | USART2 PA2/PA3 (VCP) + DMA1 channel 5 | CPU2 | CPU2 vector names: `USART2_IRQn`, `DMA1_Channel4_5_6_7_IRQn` |
+| USART1 PB7 (GNSS receiver) | CPU1 | RX only, 9600 8N1, interrupt reception; the lines reach the VCP through the SRAM1 ring of 3.1 |
 | Low power | CPU2 sleeps only (`WFI`) | `LOW_POWER_DISABLE 1`: platform Stop 2 entry needs a CPU1/CPU2 IPCC+HSEM handshake that this project does not implement |
 | HAL time base | RTC (LSE) | `sys_app.c` overrides `HAL_InitTick`/`HAL_GetTick`/`HAL_Delay`; SysTick is never enabled on CPU2, so ping-pong timings do not depend on the CPU clock |
 
@@ -79,6 +80,29 @@ Interrupt vector names differ between the two cores. The handlers implemented in
 | `DMA1_Channel4_5_6_7_IRQHandler` | `DMA1_Channel4_5_6_7_IRQn` | `HAL_DMA_IRQHandler(&hdma_usart2_tx)` |
 | `USART2_IRQHandler` | `USART2_IRQn` | `HAL_UART_IRQHandler(&huart2)` |
 | `SUBGHZ_Radio_IRQHandler` | `SUBGHZ_Radio_IRQn` | `HAL_SUBGHZ_IRQHandler(&hsubghz)` |
+
+### 3.1 GNSS sentences on the ST-LINK VCP
+
+CPU1 receives the SAM-M10Q NMEA stream on USART1 (PB7, 9600 8N1) while CPU2
+owns USART2 and its DMA channel, so the sentences travel through a 512-byte
+ring in SRAM1 instead of through the UART:
+
+| Part | Where |
+|---|---|
+| Ring and protocol (`GnssVcpMailbox`) | `../Common/GnssVcp/gnss_vcp_mailbox.h`; 1 KB at `0x20003C00`, carved out of CPU1's RAM1 (`../CM4/STM32WL55XX_FLASH_CM4.ld` is 15 KB, not 16 KB) |
+| Producer | `../CM4/Core/Src/gnss_vcp.c`: CPU1 main loop copies each complete line + CR LF into the ring; it never transmits |
+| Consumer | `Core/Src/gnss_vcp_trace.c`: a 50 ms `UTIL_TIMER` only schedules the `CFG_SEQ_Task_Gnss_Vcp_Trace` sequencer task, which prints whole lines through the advanced trace (DMA) |
+
+Nothing is printed from either interrupt, and neither core ever touches the
+other's UART. Each received sentence is printed verbatim as one CR LF
+terminated line at the medium verbose level (`VLEVEL_M`), without a timestamp,
+so the monitor output stays pasteable NMEA; no output is produced while no
+complete line has been received. Serial monitor: **115200 8N1** on the ST-LINK
+VCP (PA2/PA3), the same port that carries the ping-pong trace.
+
+Loss is counted, never hidden: `gnss_vcp_lines_dropped` (CPU1, ring full because
+CPU2 is not draining, e.g. no CPU2 image) and `gnss_vcp_trace_dropped` (CPU2,
+trace FIFO full).
 
 ## 4. Deviations from the upstream example (all deliberate)
 
@@ -242,7 +266,8 @@ CPU2 vector-table wiring were verified. Remaining bench work:
 
 1. Flash both cores on two NUCLEO-WL55JC2 boards, confirm the CPU2 banner
    (`PING PONG`, `APPLICATION_VERSION`, `MW_RADIO_VERSION`, `LORA_MODULATION`,
-   `rand=…`) appears on the VCP of both boards.
+   `rand=…`) appears on the VCP of both boards, and that the NMEA sentences of
+   a receiver streaming on USART1/PB7 follow it one line at a time (3.1).
 2. Confirm one board logs `Master Tx start`/`OnTxDone` and the other
    `OnRxDone`/`PONG`, with the LEDs toggling — i.e. that CPU2 really completes
    radio IRQ → sequencer task → TX/RX cycles.

@@ -21,7 +21,9 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
-
+#include "usart.h"
+#include "nmea_rx.h"
+#include "gnss_vcp.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -40,8 +42,6 @@
 /* USER CODE END PM */
 
 /* Private variables ---------------------------------------------------------*/
-
-COM_InitTypeDef BspCOMInit;
 
 /* USER CODE BEGIN PV */
 
@@ -87,7 +87,13 @@ int main(void)
 
   /* Initialize all configured peripherals */
   /* USER CODE BEGIN 2 */
+  /* GNSS receiver: USART1 RX-only (PB7, 9600 8N1) + interrupt reception */
+  MX_USART1_UART_Init();
+  NMEA_RX_Start();
 
+  /* Shared ring used to hand the received sentences to CPU2, which owns the
+     ST-LINK VCP. Initialised before CPU2 is released below. */
+  GNSS_VCP_Init();
   /* USER CODE END 2 */
 
   /* Initialize leds */
@@ -100,16 +106,10 @@ int main(void)
   BSP_PB_Init(BUTTON_SW2, BUTTON_MODE_EXTI);
   BSP_PB_Init(BUTTON_SW3, BUTTON_MODE_EXTI);
 
-  /* Initialize COM1 port (115200, 8 bits (7-bit data + 1 stop bit), no parity */
-  BspCOMInit.BaudRate   = 115200;
-  BspCOMInit.WordLength = COM_WORDLENGTH_8B;
-  BspCOMInit.StopBits   = COM_STOPBITS_1;
-  BspCOMInit.Parity     = COM_PARITY_NONE;
-  BspCOMInit.HwFlowCtl  = COM_HWCONTROL_NONE;
-  if (BSP_COM_Init(COM1, &BspCOMInit) != BSP_ERROR_NONE)
-  {
-    Error_Handler();
-  }
+  /* The ST-LINK VCP (LPUART1 on PA2/PA3) is not initialised here: PA2/PA3 are
+     owned by CPU2, which reconfigures them as USART2 115200 8N1 for the
+     SubGHz_Phy trace once CPU1 releases it below. Leaving the pins alone on
+     CPU1 keeps them free for CPU2 (and avoids CPU1 driving them as LPUART1). */
 
   /* Boot CPU2 */
   HAL_PWREx_ReleaseCore(PWR_CORE_CPU2);
@@ -122,6 +122,8 @@ int main(void)
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
+    /* Hand the latest complete sentence, if any, to CPU2 for printing. */
+    GNSS_VCP_Process();
   }
   /* USER CODE END 3 */
 }
@@ -141,10 +143,20 @@ void SystemClock_Config(void)
 
   /** Initializes the CPU, AHB and APB buses clocks
   */
-  RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_MSI;
+  /* LSE is started here, together with MSI, because CPU2 owns the RTC: its
+     UTIL_TIMER_Init() -> MX_RTC_Init() selects RCC_RTCCLKSOURCE_LSE
+     (CM0PLUS/Core/Src/rtc.c) and CPU2's HAL_GetTick() returns 0 until that
+     time base exists (CM0PLUS/Core/Src/sys_app.c). With RTCCLK missing,
+     HAL_RTC_Init() -> RTC_EnterInitMode() waits on RTC_ICSR_INITF with a tick
+     that never advances and stalls CPU2 before its trace UART is set up.
+     HAL_RCC_OscConfig() starts LSE, waits for LSERDY for up to
+     LSE_STARTUP_TIMEOUT and returns HAL_TIMEOUT if the crystal does not start,
+     so the oscillator must be running before HAL_PWREx_ReleaseCore() in main(). */
+  RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_MSI|RCC_OSCILLATORTYPE_LSE;
   RCC_OscInitStruct.MSIState = RCC_MSI_ON;
   RCC_OscInitStruct.MSICalibrationValue = RCC_MSICALIBRATION_DEFAULT;
   RCC_OscInitStruct.MSIClockRange = RCC_MSIRANGE_6;
+  RCC_OscInitStruct.LSEState = RCC_LSE_ON;
   RCC_OscInitStruct.PLL.PLLState = RCC_PLL_NONE;
   if (HAL_RCC_OscConfig(&RCC_OscInitStruct) != HAL_OK)
   {

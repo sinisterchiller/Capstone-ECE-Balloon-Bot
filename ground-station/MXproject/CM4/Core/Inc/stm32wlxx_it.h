@@ -59,7 +59,7 @@ void EXTI0_IRQHandler(void);
 void EXTI1_IRQHandler(void);
 void EXTI9_5_IRQHandler(void);
 /* USER CODE BEGIN EFP */
-
+void USART1_IRQHandler(void); /* GNSS NMEA reception */
 /* USER CODE END EFP */
 
 #ifdef __cplusplus

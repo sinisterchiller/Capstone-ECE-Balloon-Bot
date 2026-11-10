@@ -23,7 +23,7 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
-
+#include "gnss_vcp_trace.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -111,6 +111,10 @@ int main(void)
   /* Initialize the SubGHz_Phy application (radio, sequencer, RTC time base,
      trace) - equivalent to MX_SubGHz_Phy_Init() of the upstream example. */
   MX_SubGHz_Phy_Init();
+
+  /* Relay the NMEA sentences received by CPU1 (USART1) to the ST-LINK VCP.
+     Trace and timers are initialised by MX_SubGHz_Phy_Init() above. */
+  GNSS_VCP_TraceInit();
 
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */

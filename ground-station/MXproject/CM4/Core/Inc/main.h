@@ -64,6 +64,9 @@ void Error_Handler(void);
 #define RCC_OSC32_IN_GPIO_Port GPIOC
 #define RCC_OSC32_OUT_Pin GPIO_PIN_15
 #define RCC_OSC32_OUT_GPIO_Port GPIOC
+/* GNSS receiver UART: PB7 = USART1_RX (AF7). Receive-only, PB6/TX unused. */
+#define GNSS_RX_Pin GPIO_PIN_7
+#define GNSS_RX_GPIO_Port GPIOB
 
 /* USER CODE BEGIN Private defines */
 

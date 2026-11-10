@@ -54,11 +54,16 @@ enable_language(C ASM)
 # Add include paths
 target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE
     # Add user defined include paths
+    ${CMAKE_CURRENT_SOURCE_DIR}/../Common/GnssVcp  # CPU1 -> CPU2 GNSS mailbox
 )
 
 # Add sources to executable
 target_sources(${CMAKE_PROJECT_NAME} PRIVATE
     # Add user sources here
+    ${CMAKE_CURRENT_SOURCE_DIR}/Core/Src/usart.c    # USART1 RX only (GNSS)
+    ${CMAKE_CURRENT_SOURCE_DIR}/Core/Src/nmea_rx.c  # NMEA line assembly
+    ${CMAKE_CURRENT_SOURCE_DIR}/Core/Src/nmea_gga.c  # GGA position for the trace line
+    ${CMAKE_CURRENT_SOURCE_DIR}/Core/Src/gnss_vcp.c  # GNSS lines to the CPU2 VCP trace
 )
 
 # Link directories setup

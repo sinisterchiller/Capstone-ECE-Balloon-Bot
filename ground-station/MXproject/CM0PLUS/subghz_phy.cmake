@@ -45,6 +45,7 @@ target_include_directories(stm32cubemx INTERFACE
     ${SUGHZ_ROOT}/Utilities/sequencer
     ${SUGHZ_ROOT}/Utilities/lpm/tiny_lpm
     ${SUGHZ_ROOT}/Utilities/trace/adv_trace
+    ${SUGHZ_ROOT}/../Common/GnssVcp
 )
 
 # --- Application, target layer, middleware and utilities ---------------------
@@ -60,6 +61,8 @@ target_sources(${CMAKE_PROJECT_NAME} PRIVATE
     ${SUGHZ_ROOT}/Core/Src/usart_if.c
     ${SUGHZ_ROOT}/Core/Src/timer_if.c
     ${SUGHZ_ROOT}/Core/Src/stm32_lpm_if.c
+    # NMEA lines received by CPU1, printed on the ST-LINK VCP
+    ${SUGHZ_ROOT}/Core/Src/gnss_vcp_trace.c
     # PingPong application
     ${SUGHZ_ROOT}/SubGHz_Phy/App/subghz_phy_app.c
     ${SUGHZ_ROOT}/SubGHz_Phy/App/app_subghz_phy.c
