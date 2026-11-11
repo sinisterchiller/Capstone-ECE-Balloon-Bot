@@ -50,6 +50,21 @@ typedef enum
   NMEA_GGA_FIX          /*!< position rendered */
 } NmeaGgaStatus;
 
+/**
+  * @brief Parsed GGA fix data (structured, no text rendering).
+  * @note   Valid only when returned with NMEA_GGA_FIX or NMEA_GGA_NO_FIX.
+  *         For NMEA_GGA_NO_FIX, only satellites_used is meaningful (fix_quality is 0).
+  */
+typedef struct
+{
+  int32_t latitude_udeg;    /*!< Latitude in microdegrees (degrees * 1,000,000), signed */
+  int32_t longitude_udeg;   /*!< Longitude in microdegrees (degrees * 1,000,000), signed */
+  int32_t altitude_cm;      /*!< Altitude above MSL in centimetres, signed */
+  uint8_t satellites_used;  /*!< Satellites used in solution (GGA field 7) */
+  uint8_t fix_quality;      /*!< GGA fix quality indicator (0 = no fix) */
+  uint8_t _reserved[2];     /*!< Padding */
+} NmeaGgaFixData;
+
 /* Exported functions prototypes ---------------------------------------------*/
 /**
   * @brief  Renders the trace line for one complete, NUL-terminated sentence.
@@ -81,6 +96,27 @@ typedef enum
   */
 NmeaGgaStatus NMEA_GGA_RenderLine(const char *sentence, char *destination, uint16_t capacity,
                                   uint16_t *length);
+
+/**
+  * @brief  Parses a GGA sentence into structured fix data without rendering text.
+  * @param  sentence sentence text as assembled by nmea_rx.c, without CR/LF
+  *                  (a trailing CR/LF is tolerated)
+  * @param  fix_data receives the parsed fix data on NMEA_GGA_FIX or NMEA_GGA_NO_FIX
+  * @return Same status codes as NMEA_GGA_RenderLine. On NMEA_GGA_FIX, all
+  *         fields of fix_data are populated. On NMEA_GGA_NO_FIX, only
+  *         satellites_used and fix_quality (0) are populated; the position and
+  *         altitude are zero. On other statuses, fix_data is not modified.
+  * @note   The checksum is verified before any field is interpreted. A GGA
+  *         that claims a fix (quality > 0) but has an empty or out-of-range
+  *         latitude, longitude or altitude, a quality outside 1..8, or a fix
+  *         using no satellite, returns NMEA_GGA_INVALID.
+  * @note   altitude_cm resolves centimetres. Further altitude decimals are
+  *         rounded away from zero (the third decimal decides the centimetre),
+  *         so a sentence carrying more precision than the field holds cannot
+  *         bias the height. Altitudes outside -1000 m to +50000 m, the range
+  *         the telemetry packet can carry, are rejected rather than clamped.
+  */
+NmeaGgaStatus NMEA_GGA_ParseFixData(const char *sentence, NmeaGgaFixData *fix_data);
 
 #ifdef __cplusplus
 }

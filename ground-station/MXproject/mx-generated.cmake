@@ -14,8 +14,20 @@ if(CMAKE_BUILD_TYPE)
 else()
     set(MX_BUILD_TYPE_DIR Debug)
 endif()
-set(MX_CM4_BUILD_DIR     ${CMAKE_SOURCE_DIR}/CM4/build/${MX_BUILD_TYPE_DIR})
-set(MX_CM0PLUS_BUILD_DIR ${CMAKE_SOURCE_DIR}/CM0PLUS/build/${MX_BUILD_TYPE_DIR})
+
+# Firmware role: PAYLOAD or GROUND. Defaults to PAYLOAD for backward compatibility.
+if(FW_ROLE)
+    set(MX_FW_ROLE ${FW_ROLE})
+else()
+    set(MX_FW_ROLE PAYLOAD)
+endif()
+
+# Use lowercase for build directory names.
+string(TOLOWER ${MX_FW_ROLE} MX_FW_ROLE_LOWER)
+
+# Role-specific build directories to prevent stale sub-build reuse across roles.
+set(MX_CM4_BUILD_DIR     ${CMAKE_SOURCE_DIR}/build/${MX_FW_ROLE_LOWER}/CM4/${MX_BUILD_TYPE_DIR})
+set(MX_CM0PLUS_BUILD_DIR ${CMAKE_SOURCE_DIR}/build/${MX_FW_ROLE_LOWER}/CM0PLUS/${MX_BUILD_TYPE_DIR})
 
 set(ST_MULTICONTEXT MULTI_CONTEXT CACHE STRING "Type of multi-context")
 #-----------------------Build CM4 Project-----------------------#
@@ -27,7 +39,7 @@ if((${BUILD_CONTEXT} MATCHES .*CM4.*) OR (NOT DEFINED BUILD_CONTEXT))
         PREFIX                      CM4
         CONFIGURE_HANDLED_BY_BUILD  true
         INSTALL_COMMAND             ""
-        CMAKE_ARGS                  -DCMAKE_EXPORT_COMPILE_COMMANDS=ON  -DCMAKE_TOOLCHAIN_FILE=${CMAKE_TOOLCHAIN_FILE}  -DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE}
+        CMAKE_ARGS                  -DCMAKE_EXPORT_COMPILE_COMMANDS=ON  -DCMAKE_TOOLCHAIN_FILE=${CMAKE_TOOLCHAIN_FILE}  -DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE} -DFW_ROLE=${MX_FW_ROLE}
         BUILD_ALWAYS                true
     )
 
@@ -43,7 +55,7 @@ if((${BUILD_CONTEXT} MATCHES .*CM0PLUS.*) OR (NOT DEFINED BUILD_CONTEXT))
         PREFIX                      CM0PLUS
         CONFIGURE_HANDLED_BY_BUILD  true
         INSTALL_COMMAND             ""
-        CMAKE_ARGS                  -DCMAKE_EXPORT_COMPILE_COMMANDS=ON  -DCMAKE_TOOLCHAIN_FILE=${CMAKE_TOOLCHAIN_FILE}  -DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE}
+        CMAKE_ARGS                  -DCMAKE_EXPORT_COMPILE_COMMANDS=ON  -DCMAKE_TOOLCHAIN_FILE=${CMAKE_TOOLCHAIN_FILE}  -DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE} -DFW_ROLE=${MX_FW_ROLE}
         BUILD_ALWAYS                true
     )
 

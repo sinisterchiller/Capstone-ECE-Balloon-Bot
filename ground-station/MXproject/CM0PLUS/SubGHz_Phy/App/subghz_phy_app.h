@@ -37,6 +37,16 @@ extern "C" {
 /* USER CODE END ET */
 
 /* Exported constants --------------------------------------------------------*/
+/* Firmware role of this image. The build passes -DFW_ROLE=PAYLOAD or
+   -DFW_ROLE=GROUND (CM0PLUS/CMakeLists.txt, preset FW_ROLE) and the
+   preprocessor compares the resulting identifier with the two names below.
+   They must therefore be defined as distinct numbers: an undefined identifier
+   evaluates to 0 in #if, so without these definitions every
+   `FW_ROLE == PAYLOAD` and `FW_ROLE == GROUND` test would be 0 == 0 and each
+   image would compile both roles. */
+#define PAYLOAD 1
+#define GROUND  0
+
 /* MODEM type: one shall be 1 the other shall be 0 */
 #define USE_MODEM_LORA  1
 #define USE_MODEM_FSK   0

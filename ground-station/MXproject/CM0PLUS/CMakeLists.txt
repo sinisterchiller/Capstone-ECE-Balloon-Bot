@@ -17,7 +17,15 @@ if(NOT CMAKE_BUILD_TYPE)
     set(CMAKE_BUILD_TYPE "Debug")
 endif()
 
+# Firmware role: PAYLOAD or GROUND. Defaults to PAYLOAD for backward compatibility.
+if(FW_ROLE)
+    set(MX_FW_ROLE ${FW_ROLE})
+else()
+    set(MX_FW_ROLE PAYLOAD)
+endif()
+
 message("Build type: " ${CMAKE_BUILD_TYPE})
+message("FW_ROLE: " ${MX_FW_ROLE})
 
 # Enable compile command to ease indexing with e.g. clangd
 set(CMAKE_EXPORT_COMPILE_COMMANDS TRUE)
@@ -46,6 +54,7 @@ set(CMAKE_CXX_COMPILER_FORCED "true")
 # Add project symbols (macros)
 target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE
     # Add user defined symbols
+    FW_ROLE=${MX_FW_ROLE}
 )
 
 # Enable CMake support for ASM and C languages

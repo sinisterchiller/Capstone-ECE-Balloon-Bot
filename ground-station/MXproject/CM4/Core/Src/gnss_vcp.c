@@ -26,6 +26,7 @@
 #include "gnss_vcp_mailbox.h"
 #include "nmea_gga.h"
 #include "nmea_rx.h"
+#include "telemetry.h"
 
 #include <stdbool.h>
 
@@ -44,7 +45,7 @@ volatile uint32_t gnss_vcp_gga_invalid;
 /* USER CODE BEGIN PV */
 /* Raw trace switch: true prints each received NMEA sentence as well, false
    prints only the human-readable GPS lines decoded from a GGA. */
-static const bool gnss_vcp_debug = false;
+static const bool gnss_vcp_debug = true;
 /* Last nmea_rx.sequence value handled. */
 static uint32_t published_sequence;
 /* USER CODE END PV */
@@ -54,19 +55,35 @@ static uint32_t published_sequence;
 static uint16_t GNSS_VCP_CopyLine(char *destination, uint32_t active);
 static uint8_t GNSS_VCP_Post(const char *line, uint16_t length);
 static void GNSS_VCP_PostGgaLine(const char *line);
+static void GNSS_VCP_UpdateGpsStatus(const char *line);
 /* USER CODE END PFP */
 
 /* Exported functions --------------------------------------------------------*/
 void GNSS_VCP_Init(void)
 {
   GnssVcpMailbox *mailbox = GNSS_VCP_MAILBOX;
+  GnssVcpGpsStatus *gps_status = GNSS_VCP_GPS_STATUS;
 
   mailbox->write = 0u;
   mailbox->read = 0u;
   published_sequence = 0u;
   gnss_vcp_lines_dropped = 0u;
   gnss_vcp_gga_invalid = 0u;
-  __DMB(); /* empty ring visible to CPU2 before it starts reading */
+
+  /* Initialise GPS status to no-fix. */
+  gps_status->seq = 0u;
+  gps_status->fix_timestamp_ms = 0u;
+  gps_status->fix_valid = 0u;
+  gps_status->latitude_udeg = 0;
+  gps_status->longitude_udeg = 0;
+  gps_status->altitude_cm = 0;
+  gps_status->satellites_used = 0u;
+
+  __DMB(); /* empty ring and initial GPS status visible to CPU2 */
+
+  /* Mark the status as set up only after the no-fix fields are visible, so
+     CPU2 never accepts the random RAM contents of an uninitialised status. */
+  gps_status->initialized = GNSS_VCP_GPS_STATUS_INIT_MARK;
 }
 
 void GNSS_VCP_Process(void)
@@ -96,6 +113,9 @@ void GNSS_VCP_Process(void)
   }
 
   published_sequence = sequence;
+
+  /* Parse GGA for structured GPS status (telemetry). */
+  GNSS_VCP_UpdateGpsStatus(line);
 
   if (gnss_vcp_debug)
   {
@@ -183,6 +203,86 @@ static uint8_t GNSS_VCP_Post(const char *line, uint16_t length)
   __DMB(); /* line bytes reach the shared RAM before the new write index */
   mailbox->write = write + total;
   return 1u;
+}
+
+/**
+  * @brief  Parses a GGA sentence and updates the shared GPS status snapshot.
+  * @param  line complete NMEA sentence copied out of the receiver state
+  * @note   Updates the GPS status in shared memory using a seqlock protocol.
+  *         On valid fix: publishes coordinates, altitude, satellites, timestamp.
+  *         On no-fix (quality 0): publishes fix_valid=0 with satellite count.
+  *         On invalid GGA: does not modify the existing status (staleness
+  *         is handled by the periodic expiration check).
+  */
+static void GNSS_VCP_UpdateGpsStatus(const char *line)
+{
+  NmeaGgaFixData fix_data;
+  NmeaGgaStatus status;
+  uint32_t now_ms = HAL_GetTick();
+  GnssVcpGpsStatus *gps_status = GNSS_VCP_GPS_STATUS;
+
+  status = NMEA_GGA_ParseFixData(line, &fix_data);
+
+  if (status == NMEA_GGA_FIX)
+  {
+    /* Valid fix: publish all fields with current timestamp. */
+    GNSS_VCP_PublishGpsStatus(gps_status, now_ms, 1u,
+                              fix_data.latitude_udeg,
+                              fix_data.longitude_udeg,
+                              fix_data.altitude_cm,
+                              fix_data.satellites_used);
+  }
+  else if (status == NMEA_GGA_NO_FIX)
+  {
+    /* No fix: publish fix_valid=0, keep satellite count for info. */
+    GNSS_VCP_PublishGpsStatus(gps_status, now_ms, 0u,
+                              0, 0, 0,
+                              fix_data.satellites_used);
+  }
+  /* For NMEA_GGA_NOT_GGA or NMEA_GGA_INVALID, do not update the status.
+     The existing fix (if any) will age out via Telemetry_IsFixCurrent. */
+}
+
+/**
+  * @brief  Checks and expires stale GPS fixes.
+  * @note   Call periodically from the main loop. If the current fix is older
+  *         than TELEMETRY_MAX_FIX_AGE_MS, it is invalidated. The status is
+  *         only rewritten when a fix that claimed to be valid has expired:
+  *         re-publishing an already invalid status on every call would keep
+  *         the seqlock busy and could starve the CPU2 consumer.
+  */
+void GNSS_VCP_CheckFixExpiration(void)
+{
+  GnssVcpGpsStatus *gps_status = GNSS_VCP_GPS_STATUS;
+  uint32_t now_ms = HAL_GetTick();
+  GnssVcpGpsStatus local_status;
+
+  /* Try to read current status. */
+  if (GNSS_VCP_TryReadGpsStatus(gps_status, &local_status))
+  {
+    if (local_status.fix_valid == 0u)
+    {
+      return; /* already expired or no fix yet: nothing to publish */
+    }
+
+    /* Convert to TelemetryGpsStatus for the expiry check. */
+    TelemetryGpsStatus telemetry_status = {
+      .fix_valid = local_status.fix_valid,
+      .fix_timestamp_ms = local_status.fix_timestamp_ms,
+      .latitude_udeg = local_status.latitude_udeg,
+      .longitude_udeg = local_status.longitude_udeg,
+      .altitude_cm = local_status.altitude_cm,
+      .satellites_used = local_status.satellites_used
+    };
+
+    if (!Telemetry_IsFixCurrent(&telemetry_status, now_ms))
+    {
+      /* Fix is stale: publish invalidated status with same timestamp
+         (so age keeps increasing) but fix_valid=0. */
+      GNSS_VCP_PublishGpsStatus(gps_status, local_status.fix_timestamp_ms, 0u,
+                                0, 0, 0, 0u);
+    }
+  }
 }
 
 /**

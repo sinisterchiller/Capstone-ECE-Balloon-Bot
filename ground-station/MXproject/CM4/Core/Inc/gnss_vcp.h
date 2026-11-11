@@ -58,6 +58,14 @@ void GNSS_VCP_Init(void);
   */
 void GNSS_VCP_Process(void);
 
+/**
+  * @brief  Checks and expires stale GPS fixes in the shared status snapshot.
+  * @note   Call periodically from the main loop (e.g. every 1-5 seconds).
+  *         If the current fix is older than TELEMETRY_MAX_FIX_AGE_MS,
+  *         it is invalidated (fix_valid cleared).
+  */
+void GNSS_VCP_CheckFixExpiration(void);
+
 #ifdef __cplusplus
 }
 #endif

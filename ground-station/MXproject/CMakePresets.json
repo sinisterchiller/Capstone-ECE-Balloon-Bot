@@ -6,7 +6,7 @@
             "hidden": true,
             "generator": "Ninja",
             "binaryDir": "${sourceDir}/build/${presetName}",
-		    "toolchainFile": "${sourceDir}/gcc-arm-none-eabi.cmake",
+            "toolchainFile": "${sourceDir}/gcc-arm-none-eabi.cmake",
             "cacheVariables": {
             }
         },
@@ -23,6 +23,50 @@
             "cacheVariables": {
                 "CMAKE_BUILD_TYPE": "Release"
             }
+        },
+        {
+            "name": "payload-Debug",
+            "inherits": "default",
+            "binaryDir": "${sourceDir}/build/payload",
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "Debug",
+                "FW_ROLE": "PAYLOAD"
+            }
+        },
+        {
+            "name": "payload-Release",
+            "inherits": "default",
+            "binaryDir": "${sourceDir}/build/payload",
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "Release",
+                "FW_ROLE": "PAYLOAD"
+            }
+        },
+        {
+            "name": "ground-Debug",
+            "inherits": "default",
+            "binaryDir": "${sourceDir}/build/ground",
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "Debug",
+                "FW_ROLE": "GROUND"
+            }
+        },
+        {
+            "name": "ground-Release",
+            "inherits": "default",
+            "binaryDir": "${sourceDir}/build/ground",
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "Release",
+                "FW_ROLE": "GROUND"
+            }
+        },
+        {
+            "name": "payload",
+            "inherits": "payload-Debug"
+        },
+        {
+            "name": "ground",
+            "inherits": "ground-Debug"
         }
     ],
     "buildPresets": [
@@ -33,6 +77,14 @@
         {
             "name": "Release",
             "configurePreset": "Release"
+        },
+        {
+            "name": "payload",
+            "configurePreset": "payload"
+        },
+        {
+            "name": "ground",
+            "configurePreset": "ground"
         }
     ]
 }

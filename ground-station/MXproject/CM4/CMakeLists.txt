@@ -17,7 +17,15 @@ if(NOT CMAKE_BUILD_TYPE)
     set(CMAKE_BUILD_TYPE "Debug")
 endif()
 
+# Firmware role: PAYLOAD or GROUND. Defaults to PAYLOAD for backward compatibility.
+if(FW_ROLE)
+    set(MX_FW_ROLE ${FW_ROLE})
+else()
+    set(MX_FW_ROLE PAYLOAD)
+endif()
+
 message("Build type: " ${CMAKE_BUILD_TYPE})
+message("FW_ROLE: " ${MX_FW_ROLE})
 
 # Enable compile command to ease indexing with e.g. clangd
 set(CMAKE_EXPORT_COMPILE_COMMANDS TRUE)
@@ -46,6 +54,7 @@ set(CMAKE_CXX_COMPILER_FORCED "true")
 # Add project symbols (macros)
 target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE
     # Add user defined symbols
+    FW_ROLE=${MX_FW_ROLE}
 )
 
 # Enable CMake support for ASM and C languages
@@ -55,6 +64,7 @@ enable_language(C ASM)
 target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE
     # Add user defined include paths
     ${CMAKE_CURRENT_SOURCE_DIR}/../Common/GnssVcp  # CPU1 -> CPU2 GNSS mailbox
+    ${CMAKE_CURRENT_SOURCE_DIR}/../Common/Telemetry  # Telemetry packet codec
 )
 
 # Add sources to executable
@@ -64,6 +74,7 @@ target_sources(${CMAKE_PROJECT_NAME} PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/Core/Src/nmea_rx.c  # NMEA line assembly
     ${CMAKE_CURRENT_SOURCE_DIR}/Core/Src/nmea_gga.c  # GGA position for the trace line
     ${CMAKE_CURRENT_SOURCE_DIR}/Core/Src/gnss_vcp.c  # GNSS lines to the CPU2 VCP trace
+    ${CMAKE_CURRENT_SOURCE_DIR}/../Common/Telemetry/telemetry.c  # Telemetry packet codec
 )
 
 # Link directories setup

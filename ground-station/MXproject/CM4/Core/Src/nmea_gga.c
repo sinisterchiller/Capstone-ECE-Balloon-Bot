@@ -50,6 +50,15 @@
 /* Size of the copied altitude text, NUL included. NMEA fields cannot exceed
    the 100-byte sentence buffer, so any realistic altitude fits. */
 #define NMEA_GGA_ALTITUDE_CAPACITY 16u
+
+/* Altitude range the telemetry packet can carry: -1000 m to +50000 m, i.e.
+   -100000 cm to +5000000 cm. A GGA outside it has no representable field, so
+   the position is rejected instead of being clamped. */
+#define NMEA_GGA_ALTITUDE_MIN_CM   (-100000)
+#define NMEA_GGA_ALTITUDE_MAX_CM   (5000000)
+/* Largest whole-metre magnitude either limit can hold, used to bound the
+   accumulation before it can overflow. */
+#define NMEA_GGA_ALTITUDE_MAX_M    50000u
 /* USER CODE END PD */
 
 /* Private types -------------------------------------------------------------*/
@@ -89,6 +98,7 @@ static uint8_t NMEA_GGA_ParseCoordinate(NmeaGgaField coordinate, NmeaGgaField he
                                         uint32_t *micro_degrees, uint8_t *is_negative);
 static uint8_t NMEA_GGA_ParseAltitude(NmeaGgaField altitude, NmeaGgaField unit,
                                       char *destination, uint16_t capacity);
+static uint8_t NMEA_GGA_AltitudeToCentimetres(const char *text, int32_t *altitude_cm);
 static NmeaGgaStatus NMEA_GGA_ParseFix(const char *fields, const char *fields_end,
                                        NmeaGgaFix *fix);
 static uint8_t NMEA_GGA_Append(char *destination, uint16_t capacity, uint16_t *length,
@@ -180,7 +190,120 @@ NmeaGgaStatus NMEA_GGA_RenderLine(const char *sentence, char *destination, uint1
 }
 
 /* USER CODE BEGIN EF */
+NmeaGgaStatus NMEA_GGA_ParseFixData(const char *sentence, NmeaGgaFixData *fix_data)
+{
+  NmeaGgaFix fix;
+  const char *fields_end;
+  NmeaGgaStatus status;
+  NmeaGgaField quality_text;
+  NmeaGgaField satellites_used;
+  uint32_t quality;
+  uint32_t count;
 
+  if ((sentence == NULL) || (fix_data == NULL))
+  {
+    return NMEA_GGA_INVALID;
+  }
+
+  if (NMEA_GGA_IsGga(sentence) == 0u)
+  {
+    return NMEA_GGA_NOT_GGA;
+  }
+
+  fields_end = NMEA_GGA_ChecksumEnd(sentence);
+  if (fields_end == NULL)
+  {
+    return NMEA_GGA_INVALID;
+  }
+
+  status = NMEA_GGA_ParseFix(sentence + 1u, fields_end, &fix);
+  if (status == NMEA_GGA_INVALID)
+  {
+    return NMEA_GGA_INVALID;
+  }
+
+  if (status == NMEA_GGA_NO_FIX)
+  {
+    /* Extract satellite count for no-fix status. */
+    if ((NMEA_GGA_GetField(sentence + 1u, fields_end, NMEA_GGA_FIELD_SATELLITES_USED,
+                           &satellites_used) != 0u) &&
+        (NMEA_GGA_ParseUnsigned(satellites_used, 99u, &count) != 0u))
+    {
+      fix_data->satellites_used = (uint8_t)count;
+    }
+    else
+    {
+      fix_data->satellites_used = 0u;
+    }
+    fix_data->fix_quality = 0u;
+    fix_data->latitude_udeg = 0;
+    fix_data->longitude_udeg = 0;
+    fix_data->altitude_cm = 0;
+    return NMEA_GGA_NO_FIX;
+  }
+  if (status != NMEA_GGA_FIX)
+  {
+    return status;
+  }
+
+  /* Valid fix: decode everything into locals first, so a sentence rejected by
+     any of the checks below leaves fix_data untouched. */
+  {
+    int32_t latitude_udeg = (int32_t)fix.latitude_micro_degrees;
+    int32_t longitude_udeg = (int32_t)fix.longitude_micro_degrees;
+    int32_t altitude_cm;
+    uint8_t fix_quality = 0u;
+    uint8_t used = 0u;
+
+    if (fix.latitude_negative != 0u)
+    {
+      latitude_udeg = -latitude_udeg;
+    }
+    if (fix.longitude_negative != 0u)
+    {
+      longitude_udeg = -longitude_udeg;
+    }
+    if (NMEA_GGA_AltitudeToCentimetres(fix.altitude, &altitude_cm) == 0u)
+    {
+      return NMEA_GGA_INVALID;
+    }
+
+    /* Fix quality and satellites used for completeness. */
+    if ((NMEA_GGA_GetField(sentence + 1u, fields_end, NMEA_GGA_FIELD_FIX_QUALITY,
+                           &quality_text) != 0u) &&
+        (NMEA_GGA_ParseUnsigned(quality_text, 999u, &quality) != 0u))
+    {
+      fix_quality = (uint8_t)quality;
+    }
+    if ((NMEA_GGA_GetField(sentence + 1u, fields_end, NMEA_GGA_FIELD_SATELLITES_USED,
+                           &satellites_used) != 0u) &&
+        (NMEA_GGA_ParseUnsigned(satellites_used, 99u, &count) != 0u))
+    {
+      used = (uint8_t)count;
+    }
+
+    /* Validate fix quality: must be 1..8 for a valid GGA fix.
+       0 = no fix (already handled), 1=GPS, 2=DGPS, 4=RTK fixed, 5=RTK float,
+       8=sim. */
+    if ((fix_quality == 0u) || (fix_quality > 8u))
+    {
+      return NMEA_GGA_INVALID;
+    }
+    /* A valid fix must use at least one satellite. */
+    if (used == 0u)
+    {
+      return NMEA_GGA_INVALID;
+    }
+
+    fix_data->latitude_udeg = latitude_udeg;
+    fix_data->longitude_udeg = longitude_udeg;
+    fix_data->altitude_cm = altitude_cm;
+    fix_data->satellites_used = used;
+    fix_data->fix_quality = fix_quality;
+  }
+
+  return NMEA_GGA_FIX;
+}
 /* USER CODE END EF */
 
 /* Private functions ---------------------------------------------------------*/
@@ -513,6 +636,106 @@ static uint8_t NMEA_GGA_ParseAltitude(NmeaGgaField altitude, NmeaGgaField unit,
 
   memcpy(destination, altitude.text, altitude.length);
   destination[altitude.length] = '\0';
+  return 1u;
+}
+
+/**
+  * @brief  Converts the altitude text of a GGA to centimetres.
+  * @param  text altitude in metres, as validated and copied by
+  *              NMEA_GGA_ParseAltitude, e.g. "545.4" or "-12.30"
+  * @param  altitude_cm receives the value on success
+  * @return 1 when the text is a number whose value fits the telemetry altitude
+  *         range, 0 otherwise
+  * @note   The accumulation is bounded by NMEA_GGA_ALTITUDE_MAX_M before each
+  *         multiply, so no intermediate value can overflow, whatever the digit
+  *         count of the field. A third decimal decides the centimetre (rounded
+  *         away from zero); later decimals cannot change it, so a receiver that
+  *         reports more precision than the field carries never biases the
+  *         height downwards.
+  */
+static uint8_t NMEA_GGA_AltitudeToCentimetres(const char *text, int32_t *altitude_cm)
+{
+  const char *cursor = text;
+  uint32_t metres = 0u;
+  uint32_t centimetres = 0u;
+  uint32_t value;
+  uint32_t fraction_digits = 0u;
+  uint32_t round_up = 0u;
+  uint8_t negative = 0u;
+
+  if ((cursor == NULL) || (altitude_cm == NULL))
+  {
+    return 0u;
+  }
+
+  if (*cursor == '-')
+  {
+    negative = 1u;
+    cursor++;
+  }
+  else if (*cursor == '+')
+  {
+    cursor++;
+  }
+
+  while ((*cursor >= '0') && (*cursor <= '9'))
+  {
+    if (metres > NMEA_GGA_ALTITUDE_MAX_M)
+    {
+      return 0u; /* beyond any altitude the packet can carry */
+    }
+    metres = (metres * 10u) + (uint32_t)(*cursor - '0');
+    cursor++;
+  }
+
+  if (*cursor == '.')
+  {
+    cursor++;
+    while ((*cursor >= '0') && (*cursor <= '9'))
+    {
+      if (fraction_digits < 2u)
+      {
+        centimetres = (centimetres * 10u) + (uint32_t)(*cursor - '0');
+        fraction_digits++;
+      }
+      else if (fraction_digits == 2u)
+      {
+        round_up = ((*cursor - '0') >= 5) ? 1u : 0u;
+        fraction_digits++;
+      }
+      cursor++;
+    }
+  }
+
+  if (*cursor != '\0')
+  {
+    return 0u; /* leftover characters: not the text ParseAltitude accepted */
+  }
+  while (fraction_digits < 2u)
+  {
+    centimetres *= 10u;
+    fraction_digits++;
+  }
+
+  value = (metres * 100u) + centimetres + round_up;
+
+  if (negative != 0u)
+  {
+    if (value > (uint32_t)(-NMEA_GGA_ALTITUDE_MIN_CM))
+    {
+      return 0u;
+    }
+    *altitude_cm = -(int32_t)value;
+  }
+  else
+  {
+    if (value > (uint32_t)NMEA_GGA_ALTITUDE_MAX_CM)
+    {
+      return 0u;
+    }
+    *altitude_cm = (int32_t)value;
+  }
+
   return 1u;
 }
 

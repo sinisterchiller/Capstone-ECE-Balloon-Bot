@@ -485,6 +485,270 @@ typedef struct
   unsigned char tail[8];
 } GuardedLine;
 
+/**
+  * @brief  Wraps a GGA field list into a sentence with its checksum appended.
+  * @param  body fields that follow the address field, i.e. after "$GPGGA,"
+  * @param  buffer destination, holds the sentence on return
+  * @param  capacity size of destination in bytes
+  * @return buffer
+  */
+static const char *make_gga(const char *body, char *buffer, size_t capacity)
+{
+  uint8_t checksum = 0u;
+  size_t length;
+  const char *cursor;
+
+  length = (size_t)snprintf(buffer, capacity, "$GPGGA,%s", body);
+  for (cursor = buffer + 1; (cursor < (buffer + length)) && (*cursor != '\0'); cursor++)
+  {
+    checksum ^= (uint8_t)*cursor;
+  }
+  (void)snprintf(buffer + length, capacity - length, "*%02X", (unsigned int)checksum);
+  return buffer;
+}
+
+/* Structured parse expectations. latitude/longitude/altitude/satellites are
+   the fields expected on NMEA_GGA_FIX; a no-fix case expects zeroes there. */
+typedef struct
+{
+  const char *name;
+  const char *body;
+  NmeaGgaStatus status;
+  int32_t latitude_udeg;
+  int32_t longitude_udeg;
+  int32_t altitude_cm;
+  uint8_t satellites_used;
+} ParseCase;
+
+/* 4807.038 N / 01131.000 E is 48117300 / 11516667 microdegrees. */
+static const ParseCase parse_cases[] =
+{
+  {
+    "fix, one altitude decimal",
+    "123519,4807.038,N,01131.000,E,1,08,0.9,545.4,M,46.9,M,,",
+    NMEA_GGA_FIX, 48117300, 11516667, 54540, 8u
+  },
+  {
+    "fix, two altitude decimals",
+    "123519,4807.038,N,01131.000,E,1,08,0.9,545.40,M,46.9,M,,",
+    NMEA_GGA_FIX, 48117300, 11516667, 54540, 8u
+  },
+  {
+    "fix, whole-metre altitude",
+    "123519,4807.038,N,01131.000,E,1,08,0.9,545,M,46.9,M,,",
+    NMEA_GGA_FIX, 48117300, 11516667, 54500, 8u
+  },
+  {
+    "fix, negative altitude",
+    "123519,4807.038,N,01131.000,E,1,08,0.9,-12.30,M,46.9,M,,",
+    NMEA_GGA_FIX, 48117300, 11516667, -1230, 8u
+  },
+  {
+    "fix, explicitly signed altitude",
+    "123519,4807.038,N,01131.000,E,1,08,0.9,+545.4,M,46.9,M,,",
+    NMEA_GGA_FIX, 48117300, 11516667, 54540, 8u
+  },
+  {
+    "third altitude decimal rounds up",
+    "123519,4807.038,N,01131.000,E,1,08,0.9,545.456,M,46.9,M,,",
+    NMEA_GGA_FIX, 48117300, 11516667, 54546, 8u
+  },
+  {
+    "third altitude decimal rounds down",
+    "123519,4807.038,N,01131.000,E,1,08,0.9,545.454,M,46.9,M,,",
+    NMEA_GGA_FIX, 48117300, 11516667, 54545, 8u
+  },
+  {
+    "digit after the third decimal cannot change the centimetre",
+    "123519,4807.038,N,01131.000,E,1,08,0.9,545.4449,M,46.9,M,,",
+    NMEA_GGA_FIX, 48117300, 11516667, 54544, 8u
+  },
+  {
+    "negative altitude rounds away from zero",
+    "123519,4807.038,N,01131.000,E,1,08,0.9,-0.005,M,46.9,M,,",
+    NMEA_GGA_FIX, 48117300, 11516667, -1, 8u
+  },
+  {
+    "altitude at the upper limit",
+    "123519,4807.038,N,01131.000,E,1,08,0.9,50000.0,M,46.9,M,,",
+    NMEA_GGA_FIX, 48117300, 11516667, 5000000, 8u
+  },
+  {
+    "altitude above the upper limit",
+    "123519,4807.038,N,01131.000,E,1,08,0.9,50001.0,M,46.9,M,,",
+    NMEA_GGA_INVALID, 0, 0, 0, 0u
+  },
+  {
+    "altitude rounded above the upper limit",
+    "123519,4807.038,N,01131.000,E,1,08,0.9,50000.004,M,46.9,M,,",
+    NMEA_GGA_FIX, 48117300, 11516667, 5000000, 8u
+  },
+  {
+    "altitude at the lower limit",
+    "123519,4807.038,N,01131.000,E,1,08,0.9,-1000.0,M,46.9,M,,",
+    NMEA_GGA_FIX, 48117300, 11516667, -100000, 8u
+  },
+  {
+    "altitude below the lower limit",
+    "123519,4807.038,N,01131.000,E,1,08,0.9,-1000.1,M,46.9,M,,",
+    NMEA_GGA_INVALID, 0, 0, 0, 0u
+  },
+  {
+    "altitude just beyond the signed 32-bit range",
+    "123519,4807.038,N,01131.000,E,1,08,0.9,21474836.47,M,46.9,M,,",
+    NMEA_GGA_INVALID, 0, 0, 0, 0u
+  },
+  {
+    "altitude at INT32_MAX",
+    "123519,4807.038,N,01131.000,E,1,08,0.9,2147483647,M,46.9,M,,",
+    NMEA_GGA_INVALID, 0, 0, 0, 0u
+  },
+  {
+    "negative altitude at INT32_MIN magnitude",
+    "123519,4807.038,N,01131.000,E,1,08,0.9,-2147483648,M,46.9,M,,",
+    NMEA_GGA_INVALID, 0, 0, 0, 0u
+  },
+  {
+    "altitude far beyond 64-bit range",
+    "123519,4807.038,N,01131.000,E,1,08,0.9,99999999999999999999,M,46.9,M,,",
+    NMEA_GGA_INVALID, 0, 0, 0, 0u
+  },
+  {
+    "no fix status",
+    "123521,,,,,0,03,99.99,,,,,,",
+    NMEA_GGA_NO_FIX, 0, 0, 0, 3u
+  },
+  {
+    "no fix with coordinates still present",
+    "123522,4807.038,N,01131.000,E,0,00,99.99,545.4,M,46.9,M,,",
+    NMEA_GGA_NO_FIX, 0, 0, 0, 0u
+  },
+  {
+    "fix quality outside 1..8",
+    "123519,4807.038,N,01131.000,E,9,08,0.9,545.4,M,46.9,M,,",
+    NMEA_GGA_INVALID, 0, 0, 0, 0u
+  },
+  {
+    "fix without a satellite in the solution",
+    "123519,4807.038,N,01131.000,E,1,00,0.9,545.4,M,46.9,M,,",
+    NMEA_GGA_INVALID, 0, 0, 0, 0u
+  },
+};
+
+/**
+  * @brief  Parses one case and compares every structured field.
+  */
+static void check_parse(const ParseCase *test_case)
+{
+  char buffer[NMEA_GGA_LINE_CAPACITY];
+  NmeaGgaFixData fix_data;
+  NmeaGgaStatus status;
+
+  memset(&fix_data, 0x5A, sizeof(fix_data));
+  status = NMEA_GGA_ParseFixData(make_gga(test_case->body, buffer, sizeof(buffer)), &fix_data);
+
+  if (status != test_case->status)
+  {
+    printf("FAIL parse %s: status %d, expected %d\n", test_case->name, (int)status,
+           (int)test_case->status);
+    failures++;
+    return;
+  }
+
+  if (test_case->status == NMEA_GGA_INVALID)
+  {
+    /* A rejected sentence must not leave a partially decoded position. */
+    if ((fix_data.latitude_udeg != (int32_t)0x5A5A5A5A) ||
+        (fix_data.altitude_cm != (int32_t)0x5A5A5A5A))
+    {
+      printf("FAIL parse %s: rejected sentence modified the fix data\n", test_case->name);
+      failures++;
+    }
+    return;
+  }
+
+  if (fix_data.latitude_udeg != test_case->latitude_udeg)
+  {
+    printf("FAIL parse %s: latitude %ld, expected %ld\n", test_case->name,
+           (long)fix_data.latitude_udeg, (long)test_case->latitude_udeg);
+    failures++;
+  }
+  if (fix_data.longitude_udeg != test_case->longitude_udeg)
+  {
+    printf("FAIL parse %s: longitude %ld, expected %ld\n", test_case->name,
+           (long)fix_data.longitude_udeg, (long)test_case->longitude_udeg);
+    failures++;
+  }
+  if (fix_data.altitude_cm != test_case->altitude_cm)
+  {
+    printf("FAIL parse %s: altitude %ld cm, expected %ld cm\n", test_case->name,
+           (long)fix_data.altitude_cm, (long)test_case->altitude_cm);
+    failures++;
+  }
+  if (fix_data.satellites_used != test_case->satellites_used)
+  {
+    printf("FAIL parse %s: satellites %u, expected %u\n", test_case->name,
+           (unsigned int)fix_data.satellites_used,
+           (unsigned int)test_case->satellites_used);
+    failures++;
+  }
+  if ((test_case->status == NMEA_GGA_FIX) && (fix_data.fix_quality == 0u))
+  {
+    printf("FAIL parse %s: fix quality not carried\n", test_case->name);
+    failures++;
+  }
+  if ((test_case->status == NMEA_GGA_NO_FIX) && (fix_data.fix_quality != 0u))
+  {
+    printf("FAIL parse %s: no-fix status carries quality %u\n", test_case->name,
+           (unsigned int)fix_data.fix_quality);
+    failures++;
+  }
+}
+
+/* Sentences the parser must ignore or reject, and arguments it must survive. */
+static void check_parse_rejections(void)
+{
+  NmeaGgaFixData fix_data;
+
+  memset(&fix_data, 0x5A, sizeof(fix_data));
+  if (NMEA_GGA_ParseFixData("$GPGGA,123519,4807.038,N,01131.000,E,1,08,0.9,545.4,M,46.9,M,,*48",
+                            &fix_data) != NMEA_GGA_INVALID)
+  {
+    printf("FAIL parse: a checksum failure was accepted\n");
+    failures++;
+  }
+  if ((fix_data.latitude_udeg != (int32_t)0x5A5A5A5A) ||
+      (fix_data.altitude_cm != (int32_t)0x5A5A5A5A))
+  {
+    printf("FAIL parse: a checksum failure modified the fix data\n");
+    failures++;
+  }
+
+  memset(&fix_data, 0x5A, sizeof(fix_data));
+  if (NMEA_GGA_ParseFixData("$GPGSV,3,1,11,03,03,111,00,04,15,270,00*74", &fix_data) !=
+      NMEA_GGA_NOT_GGA)
+  {
+    printf("FAIL parse: a GSV sentence was not ignored\n");
+    failures++;
+  }
+  if (fix_data.altitude_cm != (int32_t)0x5A5A5A5A)
+  {
+    printf("FAIL parse: an ignored sentence modified the fix data\n");
+    failures++;
+  }
+
+  if (NMEA_GGA_ParseFixData(NULL, &fix_data) != NMEA_GGA_INVALID)
+  {
+    printf("FAIL parse: a NULL sentence was not rejected\n");
+    failures++;
+  }
+  if (NMEA_GGA_ParseFixData(GGA_FIX_NORTH_EAST, NULL) != NMEA_GGA_INVALID)
+  {
+    printf("FAIL parse: a NULL destination was not rejected\n");
+    failures++;
+  }
+}
+
 static void check_no_overflow_around_destination(void)
 {
   static const char *const sentences[] =
@@ -536,13 +800,20 @@ int main(void)
   check_capacity_bound();
   check_no_overflow_around_destination();
 
+  for (i = 0u; i < (sizeof(parse_cases) / sizeof(parse_cases[0])); i++)
+  {
+    check_parse(&parse_cases[i]);
+  }
+  check_parse_rejections();
+
   if (failures != 0u)
   {
     printf("%u failure(s)\n", failures);
     return 1;
   }
 
-  printf("nmea_gga: %u render cases passed\n",
-         (unsigned int)(sizeof(render_cases) / sizeof(render_cases[0])));
+  printf("nmea_gga: %u render cases and %u parse cases passed\n",
+         (unsigned int)(sizeof(render_cases) / sizeof(render_cases[0])),
+         (unsigned int)(sizeof(parse_cases) / sizeof(parse_cases[0])));
   return 0;
 }

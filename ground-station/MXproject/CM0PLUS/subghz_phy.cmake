@@ -46,6 +46,7 @@ target_include_directories(stm32cubemx INTERFACE
     ${SUGHZ_ROOT}/Utilities/lpm/tiny_lpm
     ${SUGHZ_ROOT}/Utilities/trace/adv_trace
     ${SUGHZ_ROOT}/../Common/GnssVcp
+    ${SUGHZ_ROOT}/../Common/Telemetry
 )
 
 # --- Application, target layer, middleware and utilities ---------------------
@@ -63,6 +64,8 @@ target_sources(${CMAKE_PROJECT_NAME} PRIVATE
     ${SUGHZ_ROOT}/Core/Src/stm32_lpm_if.c
     # NMEA lines received by CPU1, printed on the ST-LINK VCP
     ${SUGHZ_ROOT}/Core/Src/gnss_vcp_trace.c
+    # Latest GPS status of CPU1, read for telemetry
+    ${SUGHZ_ROOT}/Core/Src/gnss_status.c
     # PingPong application
     ${SUGHZ_ROOT}/SubGHz_Phy/App/subghz_phy_app.c
     ${SUGHZ_ROOT}/SubGHz_Phy/App/app_subghz_phy.c
@@ -82,4 +85,8 @@ target_sources(${CMAKE_PROJECT_NAME} PRIVATE
     ${SUGHZ_ROOT}/Utilities/sequencer/stm32_seq.c
     ${SUGHZ_ROOT}/Utilities/lpm/tiny_lpm/stm32_lpm.c
     ${SUGHZ_ROOT}/Utilities/trace/adv_trace/stm32_adv_trace.c
+    # Telemetry packet codec (shared with CM4)
+    ${SUGHZ_ROOT}/../Common/Telemetry/telemetry.c
+    # GPS status snapshot consumer (shared with the host test)
+    ${SUGHZ_ROOT}/../Common/Telemetry/telemetry_gps_status.c
 )

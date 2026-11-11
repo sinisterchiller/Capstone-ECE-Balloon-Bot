@@ -33,7 +33,31 @@
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
+/* Firmware role of this image. The build passes -DFW_ROLE=PAYLOAD or
+   -DFW_ROLE=GROUND (CM4/CMakeLists.txt, FW_ROLE in CMakePresets.json) and the
+   preprocessor below compares FW_ROLE with the two names defined here. They
+   must therefore be distinct numbers: an undefined identifier evaluates to 0
+   in #if, so without these definitions every `FW_ROLE == PAYLOAD` and
+   `FW_ROLE == GROUND` test would be 0 == 0 and the GROUND image would run the
+   payload behaviour. The same two values are defined for CPU2 in
+   CM0PLUS/SubGHz_Phy/App/subghz_phy_app.h; the two cores are separate images,
+   so each keeps its own definition. */
+#define PAYLOAD 1
+#define GROUND  0
 
+/* A missing FW_ROLE, or a numeric value that is neither PAYLOAD nor GROUND,
+   must fail the build instead of silently compiling one of the two behaviours.
+   Note that an identifier that is neither of these names also evaluates to 0
+   and is therefore indistinguishable from GROUND in #if; only the build
+   (FW_ROLE in CMakePresets.json / CM4/CMakeLists.txt) can guarantee the
+   token, which is why FW_ROLE is required to be defined at all here. */
+#if !defined(FW_ROLE)
+#error "FW_ROLE must be defined by the build (CM4/CMakeLists.txt): PAYLOAD or GROUND"
+#elif (FW_ROLE == PAYLOAD)
+#elif (FW_ROLE == GROUND)
+#else
+#error "FW_ROLE must be PAYLOAD or GROUND"
+#endif
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -87,6 +111,7 @@ int main(void)
 
   /* Initialize all configured peripherals */
   /* USER CODE BEGIN 2 */
+#if (FW_ROLE == PAYLOAD)
   /* GNSS receiver: USART1 RX-only (PB7, 9600 8N1) + interrupt reception */
   MX_USART1_UART_Init();
   NMEA_RX_Start();
@@ -94,6 +119,10 @@ int main(void)
   /* Shared ring used to hand the received sentences to CPU2, which owns the
      ST-LINK VCP. Initialised before CPU2 is released below. */
   GNSS_VCP_Init();
+#endif /* FW_ROLE == PAYLOAD */
+  /* GROUND has no GNSS receiver attached: USART1 is left uninitialised (reset
+     state, no RX interrupt enabled), so no sentence is received or parsed and
+     CPU2 is released below without a GNSS mailbox to drain. */
   /* USER CODE END 2 */
 
   /* Initialize leds */
@@ -118,12 +147,19 @@ int main(void)
   /* USER CODE BEGIN WHILE */
   while (1)
   {
-
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
+#if (FW_ROLE == PAYLOAD)
     /* Hand the latest complete sentence, if any, to CPU2 for printing. */
     GNSS_VCP_Process();
+
+    /* Periodically expire stale GPS fixes (check every loop iteration,
+       the function itself handles the age threshold). */
+    GNSS_VCP_CheckFixExpiration();
+#endif /* FW_ROLE == PAYLOAD */
+    /* GROUND has no periodic work on CPU1: CPU2 runs the receiver on its own
+       time base, and CPU1 started no GPS reception (see USER CODE 2). */
   }
   /* USER CODE END 3 */
 }
