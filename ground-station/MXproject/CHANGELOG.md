@@ -14,7 +14,7 @@ This changelog documents the complete MPU (MPU-9250/MPU-6500) integration with t
 
 ### 1.1 Peripheral Configuration
 - **I2C2** on PA11 (SDA) / PA12 (SCL), AF4, open-drain with internal pull-ups.
-- Clock source: `RCC_I2C2CLKSOURCE_SYSCLK` (system clock).
+- Clock source: I2C2 kernel clock derived from SYSCLK (MSI at 4 MHz, range 6); measured via `HAL_RCCEx_GetPeriphCLKFreq(RCC_PERIPHCLK_I2C2)` as 4 MHz.
 - Timing register: `0x00201313` (nominal 100 kHz target at 4 MHz PCLK). *Note: actual SCL frequency depends on bus rise/fall times and has not been independently verified with a timing calculator or scope.*
 - Analog filter enabled, digital filter disabled (0).
 - Interrupts explicitly **disabled** in `HAL_I2C_MspInit` — only blocking I2C transactions are used; enabling IRQs without handlers would lock the core in the default handler.
@@ -32,14 +32,15 @@ I2C: CLK=4000000 SDA=1 SCL=1
 
 ### 1.3 Device Probe at Both Addresses
 `MPU_Probe()` iterates **0x68 (AD0 low)** then **0x69 (AD0 high)**:
-- Performs `HAL_I2C_IsDeviceReady` (3 trials × 10 ms).
-- Captures HAL status, HAL error code, and `I2C2->ISR` atomically per address.
-- Reads `WHO_AM_I` (0x75) on success.
+- Reads `WHO_AM_I` (0x75) directly via `HAL_I2C_Mem_Read` (single 10 ms timeout).
+  The separate diagnostic `I2C2_ProbeAddrDiagnostic()` in i2c.c uses `HAL_I2C_IsDeviceReady` (3 trials × 10 ms) but is not the driver probe.
+- Captures HAL status, HAL error code, and `I2C2->ISR` atomically after the WHO_AM_I read.
 - **Hardware evidence:** MPU-6500 detected at 0x68 with `WHO_AM_I=0x70`. Log line:
   ```
-  MPU probe 0x68: status=0 err=0x00000000 ISR=0x00000000 WHO_AM_I=0x70
+  MPU probe 0x68: status=0 err=0x00000000 ISR=0x00000001 WHO_AM_I=0x70
   MPU detected: MPU-6500 (WHO_AM_I=0x70)
   ```
+  (User logs show ISR=0x00000001; the previous changelog incorrectly stated ISR=0x00000000.)
 - MPU-9250 (WHO_AM_I=0x71) supported but **not physically tested** on this board.
 - Unknown WHO_AM_I values are logged and the probe continues to the next address.
 
@@ -113,7 +114,7 @@ Datasheet-correct sequence:
   [ -1,  0,  0]
   [  0,  0, -1]
   ```
-- **Caveat:** `mag_align.known` defaults to `true` for MPU-9250 with the standard matrix, but **this has not been physically validated** against a known heading reference. For a non-standard board mounting, call `MPU_SetMagAlignment()` after init. Soft-iron defaults to identity with `valid = true` (no correction assumed).
+- **Caveat:** `mag_align.known` defaults to `true` for MPU-9250 with the standard datasheet matrix (AK8963 +X → MPU −Y, +Y → MPU +X, +Z → MPU −Z), but **this has not been physically validated** against a known heading reference. The `known` flag reflects that the matrix is defined, not that it has been calibrated on the board. For a non-standard board mounting, call `MPU_SetMagAlignment()` after init. Soft-iron defaults to identity with `valid = true` (no correction assumed; identity is not a calibration).
 - Magnetometer hard-iron calibration requires **physical movement** covering >10 µT range on all three axes (500 samples). Insufficient range → calibration restarts, `mag_calib.valid` stays false → heading never becomes valid.
 
 ### 2.6 Startup Calibration
@@ -224,8 +225,9 @@ typedef struct {
 - On any failure, output structures unmodified.
 
 ### 4.4 Legacy Compatibility
-- v1 (GPS only, 18 bytes) and v2 (BNO055, 26 bytes) encode/decode retained as deprecated functions.
-- ACK version bumped to 3 to match telemetry version.
+- v1 (GPS only, 18 bytes) encode/decode retained as deprecated functions.
+- v2 (BNO055, 26 bytes) encode/decode **removed** — no BNO055 code remains in the telemetry codec.
+- ACK version bumped to 3 to match telemetry version (v1 ACK was 4 bytes with version=1).
 
 ---
 
@@ -240,7 +242,7 @@ typedef struct {
 ### 5.2 Transmission & ACK Retransmit
 - **Telemetry interval:** 10 s (`TELEMETRY_TX_INTERVAL_MS`).
 - **ACK timeout:** 2 s (`ACK_TIMEOUT_MS`), one-shot timer.
-- **Retransmit:** Up to 3 retries (immediate on timeout). State machine: `WAIT_INTERVAL → TX → WAIT_ACK → (TX on timeout) → ...`.
+- **Retransmit:** `MAX_RETRIES = 2` (2 retries = 3 total attempts including the initial transmission). State machine: `WAIT_INTERVAL → TX → WAIT_ACK → (TX on timeout) → ...`.
 - Duplicate ACK detection via `last_rx_sequence`.
 
 ### 5.3 Ground Station RX (`GroundRx_Process`)
@@ -262,8 +264,8 @@ All tests compile with `-std=c11 -Wall -Wextra -Werror -fsanitize=address,undefi
 
 | Test File | Scope | Key Validations |
 |-----------|-------|-----------------|
-| `CM4/tests/mpu_test.c` | MPU driver logic (scaling, complementary filter, calibration, mag sensitivity, orientation, roll normalization, pitch clamping, stationary detection, model strings) | 15 test functions, all pass |
-| `Common/Telemetry/telemetry_test.c` | v1 (18 B) and v3 (26 B) encode/decode, ACK (4 B), bounds, extra bytes, version/type mismatch, signed MPU fields, MPU-6500 heading exclusion | 27+ test functions, all pass |
+| `CM4/tests/mpu_test.c` | MPU driver logic (scaling, complementary filter, calibration, mag sensitivity, orientation, roll normalization, pitch clamping, stationary detection, model strings) | 14 test functions, all pass |
+| `Common/Telemetry/telemetry_test.c` | v1 (18 B) and v3 (26 B) encode/decode, ACK (4 B), bounds, extra bytes, version/type mismatch, signed MPU fields, MPU-6500 heading exclusion | 36 test functions, all pass |
 | `Common/Telemetry/telemetry_mpu_status_test.c` | CPU2 snapshot consumer: first-observation gate, replacement within window, heading_valid not conflated, 500 ms expiration on CPU2 clock, published invalid, uninitialised region | 6 test functions, all pass |
 
 **Build commands verified:**
@@ -288,10 +290,11 @@ cc -std=c11 -Wall -Wextra -Werror -fsanitize=address,undefined \
 ## 7. Real Hardware Validation Evidence
 
 ### 7.1 Proven on Hardware (MPU-6500 at 0x68)
-- I2C2 peripheral clock: 4 MHz (`CLK=4000000`).
+- I2C2 peripheral clock: 4 MHz (`CLK=4000000` from `HAL_RCCEx_GetPeriphCLKFreq(RCC_PERIPHCLK_I2C2)`).
 - GPIO AF/OD config: `MODE=0xA AF=0x44 OD=0x3` (PA11/PA12 = AF4 open-drain).
 - Bus idle: `SDA=1 SCL=1`.
-- Device ready at 0x68: `HAL_I2C_IsDeviceReady` status=0, err=0, ISR=0.
+- Device probe at 0x68: direct WHO_AM_I read status=0, err=0x00000000, ISR=0x00000001 (user log).
+  The probe uses `HAL_I2C_Mem_Read` of WHO_AM_I, not `HAL_I2C_IsDeviceReady`.
 - `WHO_AM_I=0x70` → MPU-6500 identified.
 - Accel/gyro init: all 8 register readbacks match.
 - 100 Hz burst reads: `MPU_Poll` returns `HAL_OK`, `valid=1`.
