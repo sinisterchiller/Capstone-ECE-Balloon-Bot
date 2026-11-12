@@ -106,7 +106,7 @@ Datasheet-correct sequence:
   3. `mag_scaled.valid == true` (current sample DRDY, no HOFL)
   4. `mag_calib.valid == true` (hard-iron offsets calibrated with sufficient range)
   5. `mag_align.known == true` (axis alignment matrix physically calibrated)
-  6. `mag_soft_iron.valid == true` (soft-iron scale calibrated)
+  6. `mag_soft_iron.valid == true` (soft-iron scale flag valid; identity default is NOT calibrated)
 - If any prerequisite fails, `heading_valid = false`, `heading_deg = 0`.
 - Default alignment matrix assumes standard MPU-9250 chip-frame mapping (AK8963 +X → MPU −Y, +Y → MPU +X, +Z → MPU −Z):
   ```
@@ -403,10 +403,10 @@ This integration adds a complete MPU-9250/MPU-6500 IMU chain to the existing GPS
 - **100 Hz polling** with burst reads, complementary filter orientation, startup gyro bias calibration (stationary-only), and optional magnetometer hard-iron calibration (movement-required).
 - **Seqlock shared memory** protocol with CPU2-side freshness watch (500 ms expiry on consumer's clock, first-observation gate).
 - **Wire protocol v3** (26 bytes) combining GPS + MPU with strict bounds, model identification, and separate heading validity.
-- **LoRa telemetry** with 10 s interval, 2 s ACK timeout, 3 retries, and 100 ms MPU freshness observation timer.
+- **LoRa telemetry** with 10 s interval, 2 s ACK timeout, 2 retries (= 3 total sends including initial TX), and 100 ms MPU freshness observation timer.
 - **Full host test coverage** for driver logic, v1/v3 codec, and CPU2 snapshot consumer.
 
-**Hardware status:** MPU-6500 at 0x68 fully validated end-to-end. MPU-9250 / magnetometer / heading path is code-complete but **unvalidated on hardware**.
+**Hardware status:** MPU-6500 at 0x68 validated for probe, init, accel/gyro reads (valid=1), v3 packet encoding, LoRa TX and ACK receipt. Raw numeric output, orientation behavior (roll/pitch values), and ground-side v3 decode have **not** been independently verified on hardware. MPU-9250 / magnetometer / heading path is code-complete but **unvalidated on hardware**.
 
 ---
 
