@@ -41,7 +41,7 @@
 /*#define HAL_DAC_MODULE_ENABLED   */
 /*#define HAL_GTZC_MODULE_ENABLED   */
 /*#define HAL_HSEM_MODULE_ENABLED   */
-/*#define HAL_I2C_MODULE_ENABLED   */
+#define HAL_I2C_MODULE_ENABLED
 /*#define HAL_I2S_MODULE_ENABLED   */
 /*#define HAL_IPCC_MODULE_ENABLED   */
 /*#define HAL_IRDA_MODULE_ENABLED   */
@@ -239,6 +239,7 @@
 
 #ifdef HAL_I2C_MODULE_ENABLED
   #include "stm32wlxx_hal_i2c.h"
+  #include "stm32wlxx_hal_i2c_ex.h"
 #endif /* HAL_I2C_MODULE_ENABLED */
 
 #ifdef HAL_I2S_MODULE_ENABLED

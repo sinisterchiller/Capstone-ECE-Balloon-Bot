@@ -89,4 +89,6 @@ target_sources(${CMAKE_PROJECT_NAME} PRIVATE
     ${SUGHZ_ROOT}/../Common/Telemetry/telemetry.c
     # GPS status snapshot consumer (shared with the host test)
     ${SUGHZ_ROOT}/../Common/Telemetry/telemetry_gps_status.c
+    # MPU orientation snapshot consumer (shared with the host test)
+    ${SUGHZ_ROOT}/Core/Src/mpu_status.c
 )

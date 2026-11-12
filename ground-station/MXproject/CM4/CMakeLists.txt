@@ -70,10 +70,12 @@ target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE
 # Add sources to executable
 target_sources(${CMAKE_PROJECT_NAME} PRIVATE
     # Add user sources here
-    ${CMAKE_CURRENT_SOURCE_DIR}/Core/Src/usart.c    # USART1 RX only (GNSS)
-    ${CMAKE_CURRENT_SOURCE_DIR}/Core/Src/nmea_rx.c  # NMEA line assembly
-    ${CMAKE_CURRENT_SOURCE_DIR}/Core/Src/nmea_gga.c  # GGA position for the trace line
-    ${CMAKE_CURRENT_SOURCE_DIR}/Core/Src/gnss_vcp.c  # GNSS lines to the CPU2 VCP trace
+    ${CMAKE_CURRENT_SOURCE_DIR}/Core/Src/usart.c       # USART1 RX only (GNSS)
+    ${CMAKE_CURRENT_SOURCE_DIR}/Core/Src/nmea_rx.c     # NMEA line assembly
+    ${CMAKE_CURRENT_SOURCE_DIR}/Core/Src/nmea_gga.c    # GGA position for the trace line
+    ${CMAKE_CURRENT_SOURCE_DIR}/Core/Src/gnss_vcp.c    # GNSS lines to the CPU2 VCP trace
+    ${CMAKE_CURRENT_SOURCE_DIR}/Core/Src/i2c.c         # I2C2 MPU
+    ${CMAKE_CURRENT_SOURCE_DIR}/Core/Src/mpu.c         # MPU-9250/MPU-6500 driver
     ${CMAKE_CURRENT_SOURCE_DIR}/../Common/Telemetry/telemetry.c  # Telemetry packet codec
 )
 
@@ -85,6 +87,12 @@ target_link_directories(${CMAKE_PROJECT_NAME} PRIVATE
 # Add linked libraries
 target_link_libraries(${CMAKE_PROJECT_NAME} PRIVATE
     # Add user defined libraries
+)
+
+# Add I2C HAL driver sources
+target_sources(${CMAKE_PROJECT_NAME} PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/../Drivers/STM32WLxx_HAL_Driver/Src/stm32wlxx_hal_i2c.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/../Drivers/STM32WLxx_HAL_Driver/Src/stm32wlxx_hal_i2c_ex.c
 )
 
 # Remove wrong libob.a library dependency when using cpp files

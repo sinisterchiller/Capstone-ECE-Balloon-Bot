@@ -6,6 +6,11 @@
   *          USART1, next to the raw sentences when the raw trace switch is on,
   *          for printing on the ST-LINK VCP by CPU2 (see gnss_vcp_mailbox.h for
   *          the transfer and nmea_gga.h for the decoding).
+  *
+  *          The same ring also carries the short diagnostic lines other CPU1
+  *          modules need on that trace (GNSS_VCP_PostText): the CPU2 consumer
+  *          prints every whole line it finds in the ring verbatim, so a
+  *          diagnostic line needs no protocol of its own.
   ******************************************************************************
   */
 /* USER CODE END Header */
@@ -65,6 +70,19 @@ void GNSS_VCP_Process(void);
   *         it is invalidated (fix_valid cleared).
   */
 void GNSS_VCP_CheckFixExpiration(void);
+
+/**
+  * @brief  Queues one diagnostic line for the ST-LINK VCP trace.
+  * @param  text  Line text without line terminator, at most
+  *               GNSS_VCP_LINE_CAPACITY-1 characters.
+  * @return 1 when the whole line was queued, 0 when it was dropped.
+  * @note   Call from the main loop only, like GNSS_VCP_Process(): the ring has
+  *         a single producer. CPU2 prints the line verbatim, so it must be
+  *         plain ASCII without a line terminator, which the ring adds.
+  * @note   The call never waits. A line that does not fit the ring is dropped,
+  *         which is what keeps a stalled CPU2 consumer from blocking CPU1.
+  */
+uint8_t GNSS_VCP_PostText(const char *text);
 
 #ifdef __cplusplus
 }

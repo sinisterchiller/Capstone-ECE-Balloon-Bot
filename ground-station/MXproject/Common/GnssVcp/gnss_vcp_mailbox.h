@@ -46,6 +46,23 @@
   *    from each other: the CPU2 consumer (Common/Telemetry/telemetry_gps_status.h)
   *    measures the age of the last publication it observed on its own clock,
   *    which also expires a snapshot that CPU1 stopped refreshing.
+  *
+  * MPU Orientation Snapshot (single writer / single reader):
+  *  - CPU1 updates the `mpu_status` structure and then publishes a new
+  *    `seq` value after a DMB, so CPU2 never observes a partially written
+  *    status.
+  *  - CPU2 snapshots `seq`, copies the status, then verifies the sequence has
+  *    not changed. This gives a coherent view without locks.
+  *  - `initialized` carries GNSS_VCP_MPU_STATUS_INIT_MARK once CPU1 has set the
+  *    region up, so CPU2 can tell a never-initialised status from a published
+  *    invalid status.
+  *  - `valid` covers the accelerometer/gyroscope derived orientation (roll and
+  *    pitch). `heading_valid` is a separate flag: it is only set for an
+  *    MPU-9250 whose magnetometer and calibration are usable. A device without
+  *    a magnetometer (MPU-6500) never sets it, and `heading` is then zero, so
+  *    roll/pitch validity is never conflated with heading availability.
+  *  - A reading is stale if its age exceeds GNSS_VCP_MPU_MAX_DATA_AGE_MS; CPU1
+  *    clears `valid` (and `heading_valid`) in that case before publishing.
   ******************************************************************************
   */
 /* USER CODE END Header */
@@ -100,14 +117,54 @@ extern "C" {
 /**
   * @brief Offset of the GPS status snapshot within the reserved region.
   *        Placed after the ring to keep the existing ring layout unchanged.
+  *        sizeof(GnssVcpMailbox) = 520 bytes (write + read + ring[512]).
   */
-#define GNSS_VCP_GPS_STATUS_OFFSET (sizeof(GnssVcpMailbox))
+#define GNSS_VCP_GPS_STATUS_OFFSET 520u
+
+/**
+  * @brief Offset of the MPU orientation snapshot within the reserved region.
+  *        Replaces the former BNO055 snapshot at the same offset.
+  *        sizeof(GnssVcpGpsStatus) = 28 bytes.
+  */
+#define GNSS_VCP_MPU_STATUS_OFFSET (GNSS_VCP_GPS_STATUS_OFFSET + 28u)
 
 /**
   * @brief Value of GnssVcpGpsStatus::initialized once CPU1 has set the status
   *        region up. Any other value means "never initialised".
   */
 #define GNSS_VCP_GPS_STATUS_INIT_MARK 0xA5u
+
+/**
+  * @brief Value of GnssVcpMpuStatus::initialized once CPU1 has set the MPU
+  *        status region up. Any other value means "never initialised".
+  */
+#define GNSS_VCP_MPU_STATUS_INIT_MARK 0xA6u
+
+/**
+  * @brief Maximum age of MPU orientation data before it is considered stale
+  *        (milliseconds). 500 ms covers the 100 ms polling interval plus margin.
+  */
+#define GNSS_VCP_MPU_MAX_DATA_AGE_MS 500u
+
+/**
+  * @brief IMU model identifiers carried in GnssVcpMpuStatus::model. These are
+  *        the telemetry wire identifiers of the packet model byte (0 unknown,
+  *        1 MPU-6500, 2 MPU-9250). The CM4 driver enumerates the models in the
+  *        opposite numeric order (MPU_MODEL_9250 = 1, MPU_MODEL_6500 = 2) and
+  *        maps explicitly when it publishes.
+  */
+#define GNSS_VCP_MPU_MODEL_UNKNOWN 0u
+#define GNSS_VCP_MPU_MODEL_6500    1u
+#define GNSS_VCP_MPU_MODEL_9250    2u
+
+/**
+  * @brief End offset of the MPU snapshot within the reserved region, used by
+  *        the compile-time 1 KB bound check. sizeof(GnssVcpMpuStatus) = 20
+  *        bytes, so 520 + 28 + 20 = 568 bytes < 1024 bytes.
+  */
+#define GNSS_VCP_MPU_STATUS_END_OFFSET (GNSS_VCP_MPU_STATUS_OFFSET + 20u)
+
+/* Compile-time check moved to C code as static assert to avoid sizeof in preprocessor. */
 
 /* Exported types ------------------------------------------------------------*/
 /**
@@ -142,6 +199,37 @@ typedef struct
   volatile uint8_t  _reserved[2];                /*!< padding */
 } GnssVcpGpsStatus;
 
+/**
+  * @brief MPU orientation snapshot for telemetry, updated by CPU1 and read by
+  *        CPU2.
+  * @note  All members are volatile for concurrent access. CPU1 writes the
+  *        fields then publishes `seq` after a DMB; CPU2 reads `seq`, copies
+  *        the fields, then re-reads `seq` to detect concurrent updates.
+  *  - `initialized` carries GNSS_VCP_MPU_STATUS_INIT_MARK once CPU1 has set the
+  *    region up, so CPU2 can tell a never-initialised status from a published
+  *    invalid status.
+  *  - `valid` covers the accelerometer/gyroscope derived orientation (roll and
+  *    pitch). `heading_valid` is a separate flag: it is only set for an
+  *    MPU-9250 whose magnetometer and calibration are usable. A device without
+  *    a magnetometer (MPU-6500) never sets it, and `heading` is then zero, so
+  *    roll/pitch validity is never conflated with heading availability.
+  *  - A reading is stale if its age exceeds GNSS_VCP_MPU_MAX_DATA_AGE_MS; CPU1
+  *    clears `valid` (and `heading_valid`) in that case before publishing.
+  */
+typedef struct
+{
+  volatile uint32_t seq;                 /*!< publication sequence, even = stable */
+  volatile uint32_t update_timestamp_ms; /*!< CPU1 HAL_GetTick() when data was read */
+  volatile uint8_t  valid;               /*!< 1 = orientation (roll/pitch) valid */
+  volatile uint8_t  heading_valid;       /*!< 1 = heading valid (MPU-9250 magnetometer) */
+  volatile uint8_t  model;               /*!< GNSS_VCP_MPU_MODEL_* device identifier */
+  volatile uint8_t  initialized;         /*!< GNSS_VCP_MPU_STATUS_INIT_MARK once set up */
+  volatile int16_t  heading;             /*!< heading, degrees * 16, 0 when heading_valid is 0 */
+  volatile int16_t  roll;                /*!< roll, degrees * 16 (-180..+180*16) */
+  volatile int16_t  pitch;               /*!< pitch, degrees * 16 (-90..+90*16) */
+  volatile uint8_t  _reserved[2];        /*!< padding */
+} GnssVcpMpuStatus;
+
 /* Exported macro ------------------------------------------------------------*/
 /**
   * @brief Access to the mailbox in shared SRAM1.
@@ -153,6 +241,12 @@ typedef struct
   */
 #define GNSS_VCP_GPS_STATUS \
   ((GnssVcpGpsStatus *)((uint8_t *)GNSS_VCP_MAILBOX_BASE + GNSS_VCP_GPS_STATUS_OFFSET))
+
+/**
+  * @brief Access to the MPU orientation snapshot in shared SRAM1.
+  */
+#define GNSS_VCP_MPU_STATUS \
+  ((GnssVcpMpuStatus *)((uint8_t *)GNSS_VCP_MAILBOX_BASE + GNSS_VCP_MPU_STATUS_OFFSET))
 
 /* Exported inline functions -----------------------------------------------*/
 /**
@@ -227,6 +321,98 @@ static inline uint8_t GNSS_VCP_TryReadGpsStatus(const GnssVcpGpsStatus *status,
   out->longitude_udeg = status->longitude_udeg;
   out->altitude_cm = status->altitude_cm;
   out->satellites_used = status->satellites_used;
+  out->initialized = status->initialized;
+
+  /* Verify seq unchanged. */
+  GNSS_VCP_BARRIER();
+  seq2 = status->seq;
+  if (seq1 != seq2)
+  {
+    return 0u; /* concurrent write, retry */
+  }
+
+  out->seq = seq1;
+  return 1u;
+}
+
+/**
+  * @brief  Atomically publishes a new MPU orientation status from CPU1.
+  * @param  status  Pointer to the shared MPU status structure.
+  * @param  update_timestamp_ms  CPU1 HAL_GetTick() value when the data was read (CPU1 clock).
+  * @param  valid  1 if the orientation (roll/pitch) is valid, 0 otherwise.
+  * @param  heading_valid  1 if the heading is valid, 0 otherwise. Only an
+  *         MPU-9250 with usable magnetometer data and calibration sets it; a
+  *         reading must never derive heading validity from `valid`.
+  * @param  model  Device identifier, one of GNSS_VCP_MPU_MODEL_*.
+  * @param  heading  Heading in degrees * 16, 0 when heading_valid is 0.
+  * @param  roll  Roll in degrees * 16 (valid only if valid).
+  * @param  pitch  Pitch in degrees * 16 (valid only if valid).
+  * @note   Uses seq as a seqlock: increments to odd (writing), writes fields,
+  *         DMB, increments to even (stable). CPU2 reads even seq, copies,
+  *         verifies seq unchanged. The initialisation marker is set inside the
+  *         write region, so a published status is always recognisable as
+  *         initialised.
+  */
+static inline void GNSS_VCP_PublishMpuStatus(GnssVcpMpuStatus *status,
+                                             uint32_t update_timestamp_ms,
+                                             uint8_t valid,
+                                             uint8_t heading_valid,
+                                             uint8_t model,
+                                             int16_t heading,
+                                             int16_t roll,
+                                             int16_t pitch)
+{
+  /* Start write: make seq odd. */
+  status->seq += 1u;
+  GNSS_VCP_BARRIER();
+
+  /* Write all fields. */
+  status->update_timestamp_ms = update_timestamp_ms;
+  status->valid = valid;
+  status->heading_valid = heading_valid;
+  status->model = model;
+  status->heading = heading;
+  status->roll = roll;
+  status->pitch = pitch;
+  status->initialized = GNSS_VCP_MPU_STATUS_INIT_MARK;
+
+  /* End write: make seq even, after DMB so fields are visible. */
+  GNSS_VCP_BARRIER();
+  status->seq += 1u;
+}
+
+/**
+  * @brief  Attempts to atomically read a consistent MPU status snapshot on CPU2.
+  * @param  status  Pointer to the shared MPU status structure.
+  * @param  out  Destination for the copied status (non-volatile).
+  * @return 1 on success (coherent snapshot), 0 if a concurrent write occurred.
+  * @note   Caller may retry on failure. The output `seq` field is the even
+  *         sequence number observed, which can be used to detect updates. The
+  *         initialisation marker is copied as well; a value other than
+  *         GNSS_VCP_MPU_STATUS_INIT_MARK means CPU1 has not set the status up
+  *         yet and no field of the snapshot may be used.
+  */
+static inline uint8_t GNSS_VCP_TryReadMpuStatus(const GnssVcpMpuStatus *status,
+                                                GnssVcpMpuStatus *out)
+{
+  uint32_t seq1, seq2;
+
+  /* Snapshot seq (must be even for a stable read). */
+  seq1 = status->seq;
+  if (seq1 & 1u)
+  {
+    return 0u; /* write in progress */
+  }
+  GNSS_VCP_BARRIER();
+
+  /* Copy fields. */
+  out->update_timestamp_ms = status->update_timestamp_ms;
+  out->valid = status->valid;
+  out->heading_valid = status->heading_valid;
+  out->model = status->model;
+  out->heading = status->heading;
+  out->roll = status->roll;
+  out->pitch = status->pitch;
   out->initialized = status->initialized;
 
   /* Verify seq unchanged. */

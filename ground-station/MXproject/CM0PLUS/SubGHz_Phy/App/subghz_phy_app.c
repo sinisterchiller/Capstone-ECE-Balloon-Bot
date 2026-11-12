@@ -33,6 +33,7 @@
 
 #if (FW_ROLE == PAYLOAD)
 #include "gnss_status.h"
+#include "mpu_status.h"
 #include "telemetry.h"
 #endif
 #if (FW_ROLE == GROUND)
@@ -73,6 +74,8 @@
 #define TELEMETRY_TX_INTERVAL_MS      10000
 /* Maximum time to wait for ACK after TX (ms) */
 #define ACK_TIMEOUT_MS                2000
+/* MPU freshness observation interval (ms) - must be < GNSS_VCP_MPU_MAX_DATA_AGE_MS/2 */
+#define MPU_FRESHNESS_INTERVAL_MS     100
 #endif
 
 /* USER CODE END PD */
@@ -118,6 +121,8 @@ static TelemetryState_t TelemetryState = TELEMETRY_STATE_WAIT_INTERVAL;
 static UTIL_TIMER_Object_t timerTelemetryTx;
 /* ACK wait timeout timer */
 static UTIL_TIMER_Object_t timerAckTimeout;
+/* MPU freshness observation timer */
+static UTIL_TIMER_Object_t timerMpuFreshness;
 
 /* Telemetry packet sequence number */
 static uint16_t telemetry_sequence = 0;
@@ -137,6 +142,79 @@ static uint8_t retry_count = 0;
 /* Last acknowledged sequence number for duplicate detection */
 static uint16_t last_rx_sequence = 0;
 static bool     last_rx_sequence_valid = false;
+
+/* Integer fixed-point formatting helpers for embedded printf (no %f support) */
+static void Format_Microdegrees(int32_t udeg, char *buf, uint16_t buf_size)
+{
+  int32_t abs_val = (udeg >= 0) ? udeg : -udeg;
+  int32_t whole = abs_val / 1000000L;
+  int32_t frac = abs_val % 1000000L;
+  if (udeg < 0)
+  {
+    snprintf(buf, buf_size, "-%ld.%06ld", (long)whole, (long)frac);
+  }
+  else
+  {
+    snprintf(buf, buf_size, "%ld.%06ld", (long)whole, (long)frac);
+  }
+}
+
+static void Format_Centimetres(int32_t cm, char *buf, uint16_t buf_size)
+{
+  int32_t abs_val = (cm >= 0) ? cm : -cm;
+  int32_t whole = abs_val / 100L;
+  int32_t frac = abs_val % 100L;
+  if (cm < 0)
+  {
+    snprintf(buf, buf_size, "-%ld.%02ld", (long)whole, (long)frac);
+  }
+  else
+  {
+    snprintf(buf, buf_size, "%ld.%02ld", (long)whole, (long)frac);
+  }
+}
+
+static void Format_MpuDegrees(int16_t raw, char *buf, uint16_t buf_size)
+{
+  /* raw is degrees * 16, convert to hundredths: raw * 100 / 16 = raw * 25 / 4 */
+  int32_t hundredths = ((int32_t)raw * 25) / 4;
+  int32_t abs_h = (hundredths >= 0) ? hundredths : -hundredths;
+  int32_t whole = abs_h / 100;
+  int32_t frac = abs_h % 100;
+  if (hundredths < 0)
+  {
+    snprintf(buf, buf_size, "-%ld.%02ld", (long)whole, (long)frac);
+  }
+  else
+  {
+    snprintf(buf, buf_size, "%ld.%02ld", (long)whole, (long)frac);
+  }
+}
+
+static void Format_MpuSignedDegrees(int16_t raw, char *buf, uint16_t buf_size)
+{
+  /* Same as Format_MpuDegrees but for signed values (roll, pitch) */
+  Format_MpuDegrees(raw, buf, buf_size);
+}
+
+static void Format_MpuHeading(int16_t raw, char *buf, uint16_t buf_size)
+{
+  /* Heading is unsigned 0..360*16 */
+  int32_t hundredths = ((int32_t)raw * 25) / 4;
+  int32_t whole = hundredths / 100;
+  int32_t frac = hundredths % 100;
+  snprintf(buf, buf_size, "%ld.%02ld", (long)whole, (long)frac);
+}
+
+static const char* MpuModelToString(uint8_t model)
+{
+  switch (model)
+  {
+    case 1: return "MPU-6500";
+    case 2: return "MPU-9250";
+    default: return "UNKNOWN";
+  }
+}
 #endif /* FW_ROLE == GROUND */
 
 /* USER CODE END PV */
@@ -190,6 +268,12 @@ static void OnTelemetryTxTimer(void *context);
   * @param  context unused
   */
 static void OnAckTimeoutTimer(void *context);
+
+/**
+  * @brief  MPU freshness observation timer callback
+  * @param  context unused
+  */
+static void OnMpuFreshnessTimer(void *context);
 
 /**
   * @brief  Telemetry state machine implementation
@@ -292,15 +376,20 @@ void SubghzApp_Init(void)
   UTIL_TIMER_Create(&timerTelemetryTx, TELEMETRY_TX_INTERVAL_MS, UTIL_TIMER_PERIODIC, OnTelemetryTxTimer, NULL);
   /* Create ACK timeout timer (one-shot) */
   UTIL_TIMER_Create(&timerAckTimeout, ACK_TIMEOUT_MS, UTIL_TIMER_ONESHOT, OnAckTimeoutTimer, NULL);
+  /* Create MPU freshness observation timer (periodic ~100ms) */
+  UTIL_TIMER_Create(&timerMpuFreshness, MPU_FRESHNESS_INTERVAL_MS, UTIL_TIMER_PERIODIC, OnMpuFreshnessTimer, NULL);
 
   APP_LOG(TS_ON, VLEVEL_L, "Telemetry interval: %d ms\n\r", TELEMETRY_TX_INTERVAL_MS);
   APP_LOG(TS_ON, VLEVEL_L, "ACK timeout: %d ms\n\r", ACK_TIMEOUT_MS);
+  APP_LOG(TS_ON, VLEVEL_L, "MPU freshness interval: %d ms\n\r", MPU_FRESHNESS_INTERVAL_MS);
 
   /* Register telemetry process task */
   UTIL_SEQ_RegTask((1 << CFG_SEQ_Task_SubGHz_Phy_App_Process), UTIL_SEQ_RFU, Telemetry_Process);
 
   /* Start periodic transmission timer */
   UTIL_TIMER_Start(&timerTelemetryTx);
+  /* Start MPU freshness observation timer */
+  UTIL_TIMER_Start(&timerMpuFreshness);
   /* The periodic timer's first expiry is one interval away: request the first
      packet now so that it is sent as soon as the sequencer runs. */
   TelemetryState = TELEMETRY_STATE_TX;
@@ -546,7 +635,10 @@ static void RadioRxContinuous(void)
 static bool Telemetry_BuildAndTransmit(void)
 {
   TelemetryGpsStatus gps_status;
+  MpuTelemetryStatus mpu_status_raw;
+  TelemetryMpuStatus mpu_status;
   bool has_fix;
+  bool has_mpu;
 
   /* Drop anything received before this packet existed: only a packet sent
      after this point can acknowledge it, so a leftover ACK (or a packet of
@@ -556,8 +648,19 @@ static bool Telemetry_BuildAndTransmit(void)
   /* Read latest GPS status from shared memory */
   has_fix = GNSS_STATUS_ReadLatest(&gps_status);
 
-  /* Encode telemetry packet */
-  if (!Telemetry_EncodeGpsStatus(&gps_status, telemetry_sequence, BufferTx, MAX_APP_BUFFER_SIZE))
+  /* Read latest MPU status from shared memory */
+  has_mpu = MPU_STATUS_ReadLatest(&mpu_status_raw);
+
+  /* Convert MPU status to telemetry format */
+  mpu_status.valid = has_mpu ? mpu_status_raw.valid : 0u;
+  mpu_status.heading_valid = has_mpu ? mpu_status_raw.heading_valid : 0u;
+  mpu_status.model = has_mpu ? mpu_status_raw.model : GNSS_VCP_MPU_MODEL_UNKNOWN;
+  mpu_status.heading = has_mpu ? mpu_status_raw.heading : 0;
+  mpu_status.roll = has_mpu ? mpu_status_raw.roll : 0;
+  mpu_status.pitch = has_mpu ? mpu_status_raw.pitch : 0;
+
+  /* Encode combined telemetry packet (v3: GPS + MPU) */
+  if (!Telemetry_EncodeCombinedStatus(&gps_status, &mpu_status, telemetry_sequence, BufferTx, MAX_APP_BUFFER_SIZE))
   {
     APP_LOG(TS_ON, VLEVEL_L, "TX: encode failed\n\r");
     return false;
@@ -571,7 +674,7 @@ static bool Telemetry_BuildAndTransmit(void)
   memcpy(pending_tx_buffer, BufferTx, pending_tx_len);
 
   /* Log transmission */
-  if (has_fix)
+  if (gps_status.fix_valid != 0u)
   {
     APP_LOG(TS_ON, VLEVEL_L, "TX: seq=%u FIX lat=%ld lon=%ld alt=%ld sats=%u\n\r",
             telemetry_sequence,
@@ -583,6 +686,33 @@ static bool Telemetry_BuildAndTransmit(void)
   else
   {
     APP_LOG(TS_ON, VLEVEL_L, "TX: seq=%u NO_FIX\n\r", telemetry_sequence);
+  }
+
+  if (mpu_status.valid != 0u)
+  {
+    const char* model_str = (mpu_status.model == GNSS_VCP_MPU_MODEL_9250) ? "MPU-9250" :
+                            (mpu_status.model == GNSS_VCP_MPU_MODEL_6500) ? "MPU-6500" : "UNKNOWN";
+    if (mpu_status.heading_valid != 0u)
+    {
+      APP_LOG(TS_ON, VLEVEL_L, "MPU: seq=%u %s VALID hdg=%d roll=%d pitch=%d\n\r",
+              mpu_status_raw.seq,
+              model_str,
+              mpu_status.heading,
+              mpu_status.roll,
+              mpu_status.pitch);
+    }
+    else
+    {
+      APP_LOG(TS_ON, VLEVEL_L, "MPU: seq=%u %s VALID hdg=UNAVAILABLE roll=%d pitch=%d\n\r",
+              mpu_status_raw.seq,
+              model_str,
+              mpu_status.roll,
+              mpu_status.pitch);
+    }
+  }
+  else
+  {
+    APP_LOG(TS_ON, VLEVEL_L, "MPU: seq=%u INVALID\n\r", telemetry_sequence);
   }
 
   /* Increment sequence for next packet */
@@ -712,6 +842,18 @@ static void OnAckTimeoutTimer(void *context)
     }
   }
 }
+
+static void OnMpuFreshnessTimer(void *context)
+{
+  (void)context;
+  /* Periodic freshness observation: call the consumer-side freshness check
+     to observe the latest MPU publication and update the snapshot watch.
+     This runs at ~100ms, well within the 500ms age window, so the watch
+     will see publications replaced within one age window and establish
+     change_seen=true. The result is cached in the watch; telemetry reads
+     at 10s use the already-updated state. */
+  MPU_STATUS_ObserveFreshness();
+}
 #else
 /* Ground role: continuous RX + ACK */
 static void RadioRxContinuous(void)
@@ -793,7 +935,8 @@ static void GroundRx_Process(void)
 
   uint16_t rx_sequence = 0;
   TelemetryGpsStatus gps_status;
-  bool is_telemetry = Telemetry_DecodeGpsStatus(BufferRx, RxBufferSize, &gps_status, &rx_sequence);
+  TelemetryMpuStatus mpu_status;
+  bool is_telemetry = Telemetry_DecodeCombinedStatus(BufferRx, RxBufferSize, &gps_status, &mpu_status, &rx_sequence);
   RxBufferSize = 0;
 
   if (!is_telemetry)
@@ -804,19 +947,23 @@ static void GroundRx_Process(void)
     return;
   }
 
-  /* Valid telemetry packet received */
+  /* Valid telemetry packet received (strict v3 length 26 enforced by codec) */
   bool is_duplicate = (last_rx_sequence_valid && rx_sequence == last_rx_sequence);
 
   /* Log the packet (only if not a duplicate) */
   if (!is_duplicate)
   {
+    char lat_buf[32], lon_buf[32], alt_buf[32];
+    char hdg_buf[16], roll_buf[16], pitch_buf[16];
+
     if (gps_status.fix_valid != 0u)
     {
-      APP_LOG(TS_ON, VLEVEL_L, "RX: seq=%u FIX lat=%ld lon=%ld alt=%ld sats=%u RSSI=%d SNR=%d\n\r",
+      Format_Microdegrees(gps_status.latitude_udeg, lat_buf, sizeof(lat_buf));
+      Format_Microdegrees(gps_status.longitude_udeg, lon_buf, sizeof(lon_buf));
+      Format_Centimetres(gps_status.altitude_cm, alt_buf, sizeof(alt_buf));
+      APP_LOG(TS_ON, VLEVEL_L, "RX: seq=%u FIX lat=%s lon=%s alt=%sm sats=%u RSSI=%d SNR=%d\n\r",
               rx_sequence,
-              gps_status.latitude_udeg,
-              gps_status.longitude_udeg,
-              gps_status.altitude_cm,
+              lat_buf, lon_buf, alt_buf,
               gps_status.satellites_used,
               RssiValue,
               SnrValue);
@@ -828,6 +975,36 @@ static void GroundRx_Process(void)
               RssiValue,
               SnrValue);
     }
+    if (mpu_status.valid != 0u)
+    {
+      const char* model_str = MpuModelToString(mpu_status.model);
+      if (mpu_status.heading_valid != 0u)
+      {
+        Format_MpuHeading(mpu_status.heading, hdg_buf, sizeof(hdg_buf));
+        Format_MpuSignedDegrees(mpu_status.roll, roll_buf, sizeof(roll_buf));
+        Format_MpuSignedDegrees(mpu_status.pitch, pitch_buf, sizeof(pitch_buf));
+        APP_LOG(TS_ON, VLEVEL_L, "MPU: seq=%u %s VALID hdg=%d (%s) roll=%d (%s) pitch=%d (%s)\n\r",
+                rx_sequence,
+                model_str,
+                mpu_status.heading, hdg_buf,
+                mpu_status.roll, roll_buf,
+                mpu_status.pitch, pitch_buf);
+      }
+      else
+      {
+        Format_MpuSignedDegrees(mpu_status.roll, roll_buf, sizeof(roll_buf));
+        Format_MpuSignedDegrees(mpu_status.pitch, pitch_buf, sizeof(pitch_buf));
+        APP_LOG(TS_ON, VLEVEL_L, "MPU: seq=%u %s VALID hdg=UNAVAILABLE roll=%d (%s) pitch=%d (%s)\n\r",
+                rx_sequence,
+                model_str,
+                mpu_status.roll, roll_buf,
+                mpu_status.pitch, pitch_buf);
+      }
+    }
+    else
+    {
+      APP_LOG(TS_ON, VLEVEL_L, "MPU: seq=%u INVALID\n\r", rx_sequence);
+    }
     last_rx_sequence = rx_sequence;
     last_rx_sequence_valid = true;
   }
@@ -836,7 +1013,7 @@ static void GroundRx_Process(void)
     APP_LOG(TS_ON, VLEVEL_L, "RX: seq=%u DUPLICATE (ACK only)\n\r", rx_sequence);
   }
 
-  /* Always send ACK for valid packets (including duplicates) */
+  /* Always send ACK for valid packets (including duplicates) - 4 bytes */
   RadioSendAck(rx_sequence);
   /* OnTxDone will return to RX */
 }

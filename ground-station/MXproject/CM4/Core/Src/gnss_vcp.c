@@ -10,6 +10,10 @@
   * transmitted from CPU1: CPU2 owns USART2 (PA2/PA3) and its DMA channel, so
   * the trace and the receiver buffers keep working exactly as before.
   *
+  * The ring is a plain text line channel, so other CPU1 modules post their
+  * short diagnostics through GNSS_VCP_PostText() (the MPU bring-up in
+  * main.c) and CPU2 prints them verbatim, next to the GPS lines.
+  *
   * A GGA fix is printed as human-readable decimal degrees and altitude
   * (nmea_gga.c), a GGA without a position prints a status line with its
   * satellite count, and an unusable GGA prints an error line. The raw $GP/$GN
@@ -36,6 +40,24 @@
    bound the ring consumer reads. */
 _Static_assert(NMEA_GGA_LINE_CAPACITY <= GNSS_VCP_LINE_CAPACITY,
                "GGA line does not fit the GNSS VCP mailbox line capacity");
+
+/* Compile-time checks: verify the shared-memory layout matches the offsets
+   used in gnss_vcp_mailbox.h. These must hold in every translation unit that
+   includes the header, so the assertions are placed here (CM4) and in
+   CM0PLUS/Core/Src/mpu_status.c (CM0+). */
+_Static_assert(sizeof(GnssVcpMailbox) == 520u,
+               "GnssVcpMailbox size must be 520 bytes (write + read + ring[512])");
+_Static_assert(sizeof(GnssVcpGpsStatus) == 28u,
+               "GnssVcpGpsStatus size must be 28 bytes");
+_Static_assert(GNSS_VCP_GPS_STATUS_OFFSET == sizeof(GnssVcpMailbox),
+               "GPS status offset must follow the mailbox ring");
+_Static_assert(sizeof(GnssVcpMpuStatus) == 20u,
+               "GnssVcpMpuStatus size must be 20 bytes");
+_Static_assert(GNSS_VCP_MPU_STATUS_OFFSET ==
+                 (GNSS_VCP_GPS_STATUS_OFFSET + sizeof(GnssVcpGpsStatus)),
+               "MPU status offset must follow the GPS status");
+_Static_assert(GNSS_VCP_MPU_STATUS_OFFSET + sizeof(GnssVcpMpuStatus) <= GNSS_VCP_MAILBOX_RESERVED,
+               "MPU status snapshot exceeds reserved 1 KB mailbox region");
 /* USER CODE END PD */
 
 /* Private variables ---------------------------------------------------------*/
@@ -45,7 +67,7 @@ volatile uint32_t gnss_vcp_gga_invalid;
 /* USER CODE BEGIN PV */
 /* Raw trace switch: true prints each received NMEA sentence as well, false
    prints only the human-readable GPS lines decoded from a GGA. */
-static const bool gnss_vcp_debug = true;
+static const bool gnss_vcp_debug = false;
 /* Last nmea_rx.sequence value handled. */
 static uint32_t published_sequence;
 /* USER CODE END PV */
@@ -131,7 +153,24 @@ void GNSS_VCP_Process(void)
 }
 
 /* USER CODE BEGIN EF */
+uint8_t GNSS_VCP_PostText(const char *text)
+{
+  uint16_t length = 0u;
 
+  if (text == NULL)
+  {
+    return 0u;
+  }
+
+  /* Bound the line to what the CPU2 consumer copies out of the ring, so a
+     diagnostic can never be truncated into a partial line there. */
+  while ((length < (GNSS_VCP_LINE_CAPACITY - 1u)) && (text[length] != '\0'))
+  {
+    length++;
+  }
+
+  return GNSS_VCP_Post(text, length);
+}
 /* USER CODE END EF */
 
 /* Private functions ---------------------------------------------------------*/
