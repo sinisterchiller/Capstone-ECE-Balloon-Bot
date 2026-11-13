@@ -136,6 +136,84 @@ the gas status flags, and the `new_data` behaviour the wait above relies on:
 tests/run_bme68x_host_test.sh
 ```
 
+## Troubleshooting `bme68x_init failed: Device not found`
+
+`bme68x_init()` soft-resets the sensor, reads the chip ID register (`0xD0`)
+**once** and returns `BME68X_E_DEV_NOT_FOUND` for any value other than `0x61`
+(`BME68X_CHIP_ID`); the adapter maps that to `ESP_ERR_NOT_FOUND`. There are no
+retries and the bus configuration is not changed, so a failure means the byte
+on MISO was not the BME688 chip ID - it does **not** by itself say why. The
+adapter therefore logs the evidence it has, at `ESP_LOGE` (`bme68x_esp` tag):
+
+```
+E bme68x_esp: bme68x_init failed: Device not found (rslt=-3)
+E bme68x_esp: Chip ID reg 0xD0 returned 0xFF, expected 0x61
+E bme68x_esp: Bus used: SPI2_HOST MOSI=GPIO23 MISO=GPIO19 SCLK=GPIO18 CS=GPIO27, mode 0, 1000000 Hz; last callback results read=0 write=0 (0 = transferred)
+E bme68x_esp: 0xFF = MISO read high on all 8 clocks, ...   <- example: MISO silent
+E bme68x_esp: Immediate re-read returned 0xFF (stable, same value)
+```
+
+`read=`/`write=` are the adapter's SPI callback results for `bme68x_init`'s
+soft-reset write and chip ID read: `0` (`BME68X_OK`) means the
+`spi_device_polling_transmit()` transfer completed, so the bytes really came
+off the bus; `-2` (`BME68X_E_COM_FAIL`) means the ESP-IDF transfer itself
+failed and the chip ID value is not bus evidence at all. The immediate re-read
+is a single extra 1-byte frame, never retried, used only to tell a stable
+wrong value from a value that changes between reads. Working units are
+unaffected: nothing is logged differently on the success path.
+
+### Reading the observed chip ID
+
+The driver reports the value; the interpretation below is a checklist, not a
+diagnosis.
+
+| Observed | Plausible causes (verify physically) |
+| --- | --- |
+| `0xFF` | MISO never driven: no 3.3 V on VDD/VDDIO, no shared GND, CS never asserted (wrong pin / CSB not on GPIO27), breakout still strapped for I2C, SDO not on GPIO19 |
+| `0x00` | MISO stuck low: short to GND, SDO/MOSI swapped at the header, sensor never selected |
+| any other fixed value | Wrong part (confirm the marking), SDI/SDO swapped, or a bit-shifted read (`0xC2` = `0x61 << 1`) pointing at clock timing instead of wiring |
+| value changes between the two reads | Nothing is driving a defined level: power/ground/strap problem before any signal-integrity work |
+| `ESP_ERR_INVALID_RESPONSE` instead of `ESP_ERR_NOT_FOUND` | The ESP-IDF transfer failed (`BME68X_E_COM_FAIL`); GPIO conflicts or a bus not owned by this driver |
+
+### Physical checks, in the order that costs least
+
+1. **Get the actual breakout schematic/pinout.** Silkscreen names are not a
+   schematic: confirm which pin is SDI (host→sensor), which is SDO
+   (sensor→host) and which is CSB, and confirm the part is a **BME688**: a
+   BME680 answers the same chip ID (`0x61`), so the log cannot tell the two
+   apart and only the marking does.
+2. **Power and ground.** Measure 3.3 V at the breakout's VDD **and** VDDIO pins
+   (not 5 V), and confirm a shared GND between the breakout and the ESP32 with a
+   continuity check - not just the same breadboard rail.
+3. **SPI vs I2C strap.** The BME68x latches its interface at power-up from the
+   CSB/SDO levels and most breakouts expose this as a jumper or solder bridge.
+   Confirm the board is strapped for SPI and that CSB is really the pin wired to
+   GPIO27; a strap still set to I2C leaves SDO silent, which reads as `0xFF`.
+4. **Pin sense.** SDI (MOSI) must come from GPIO23 and SDO (MISO) must return on
+   GPIO19. Swapping them still clocks the bus, so the symptom is `0x00`/`0xFF`,
+   not a bus error. SCLK is GPIO18.
+5. **SPI mode.** The driver is fixed at mode 0 (CPOL=0, CPHA=0) at 1 MHz, which
+   the BME688 supports. Mode 3 is the other CPOL/CPHA combination the part
+   accepts, so it is worth one instrumented experiment **after** steps 1-4 - do
+   not switch it in firmware on a hunch, because a mode mismatch and an
+   unpowered sensor produce the same log line.
+6. **Instrument the bus.** A logic analyzer on CS (GPIO27), SCLK (GPIO18), MOSI
+   (GPIO23) and MISO (GPIO19) at ≥ 10 MS/s answers in one capture: is CS low for
+   the whole frame, are exactly 16 clocks issued (address + 1 data byte), does
+   MISO idle high between frames and does the sensor drive it during the data
+   byte. Without an analyzer: a multimeter shows CS idle high (bus released) and
+   SDO idle high (pull-up present) with no transfers running, which already
+   separates "sensor absent/silent" from "wrong data on a live bus".
+
+### Information needed to close this out
+
+The log alone cannot decide between wiring, strap, power and part problems, so a
+report of this failure is only actionable with: the **breakout model and its
+schematic/pinout**, the **observed chip ID byte and whether the re-read
+matched**, the **`read=`/`write=` callback results**, and - if available - a
+**logic-analyzer capture of the chip ID frame** or the multimeter readings from
+step 6.
+
 ## API error codes
 
 | Return | Meaning |
@@ -145,7 +223,7 @@ tests/run_bme68x_host_test.sh
 | `ESP_ERR_INVALID_STATE` | Handle not initialized, or `SPI2_HOST` already in use |
 | `ESP_ERR_NO_MEM` | Context allocation failed |
 | `ESP_ERR_TIMEOUT` | No new data within 25 ms after the conversion + heater window |
-| `ESP_ERR_NOT_FOUND` | BME68x did not answer (`BME68X_E_DEV_NOT_FOUND`) |
+| `ESP_ERR_NOT_FOUND` | BME68x did not answer (`BME68X_E_DEV_NOT_FOUND`); the raw chip ID is logged, see troubleshooting above |
 | `ESP_ERR_INVALID_RESPONSE` | SPI transfer failed (`BME68X_E_COM_FAIL`) |
 | `ESP_ERR_INVALID_SIZE` | Unexpected register length (`BME68X_E_INVALID_LENGTH`) |
 | `ESP_FAIL` | Other Bosch API error |

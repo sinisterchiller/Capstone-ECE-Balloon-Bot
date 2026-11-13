@@ -48,6 +48,10 @@ static const char *TAG = "bme68x_esp";
 /* Slack on top of conversion + heater time, absorbs SPI/polling latency */
 #define BME68X_MEAS_MARGIN_US     25000
 
+/* Register values observed on the bus when no BME688 answers the chip ID read */
+#define BME68X_CHIP_ID_MISO_HIGH  0xFF
+#define BME68X_CHIP_ID_MISO_LOW   0x00
+
 struct bme68x_esp_dev_t {
     struct bme68x_dev dev;
     spi_device_handle_t spi_handle;
@@ -55,6 +59,12 @@ struct bme68x_esp_dev_t {
     bool bus_initialized;
     bool initialized;
     uint32_t meas_duration_us; /* TPH conversion + heater time, computed at init */
+
+    /* Result of the most recent callback per direction (calloc: 0 == BME68X_OK).
+     * Bosch's dev.intf_rslt only holds whichever callback ran last, so it cannot
+     * say whether the soft-reset write of bme68x_init() was transferred. */
+    int8_t last_read_rslt;
+    int8_t last_write_rslt;
 };
 
 /*
@@ -95,6 +105,7 @@ static int8_t bme68x_spi_read(uint8_t reg_addr, uint8_t *reg_data, uint32_t len,
     if (frame_len == 0) {
         ESP_LOGE(TAG, "SPI read of %" PRIu32 " bytes cannot be framed (max %d)",
                  len, BME68X_SPI_REG_MAX_BYTES);
+        ctx->last_read_rslt = BME68X_E_INVALID_LENGTH;
         return BME68X_E_INVALID_LENGTH;
     }
 
@@ -108,10 +119,12 @@ static int8_t bme68x_spi_read(uint8_t reg_addr, uint8_t *reg_data, uint32_t len,
     esp_err_t err = spi_device_polling_transmit(ctx->spi_handle, &trans);
     if (err != ESP_OK) {
         ESP_LOGD(TAG, "SPI read of reg 0x%02X failed: %s", reg_addr, esp_err_to_name(err));
+        ctx->last_read_rslt = BME68X_E_COM_FAIL;
         return BME68X_E_COM_FAIL;
     }
 
     memcpy(reg_data, &rx_buf[1], len);
+    ctx->last_read_rslt = BME68X_OK;
     return BME68X_OK;
 }
 
@@ -135,6 +148,7 @@ static int8_t bme68x_spi_write(uint8_t reg_addr, const uint8_t *reg_data, uint32
     if (frame_len == 0) {
         ESP_LOGE(TAG, "SPI write of %" PRIu32 " bytes cannot be framed (max %d)",
                  len, BME68X_SPI_REG_MAX_BYTES);
+        ctx->last_write_rslt = BME68X_E_INVALID_LENGTH;
         return BME68X_E_INVALID_LENGTH;
     }
 
@@ -146,9 +160,11 @@ static int8_t bme68x_spi_write(uint8_t reg_addr, const uint8_t *reg_data, uint32
     esp_err_t err = spi_device_polling_transmit(ctx->spi_handle, &trans);
     if (err != ESP_OK) {
         ESP_LOGD(TAG, "SPI write of reg 0x%02X failed: %s", reg_addr, esp_err_to_name(err));
+        ctx->last_write_rslt = BME68X_E_COM_FAIL;
         return BME68X_E_COM_FAIL;
     }
 
+    ctx->last_write_rslt = BME68X_OK;
     return BME68X_OK;
 }
 
@@ -190,6 +206,66 @@ static esp_err_t bme68x_esp_err_from_rslt(int8_t rslt)
             return ESP_ERR_NOT_FINISHED;
         default:
             return ESP_FAIL;
+    }
+}
+
+/*
+ * Diagnose a rejected chip ID from the boot log alone.
+ *
+ * bme68x_init() soft-resets the sensor, reads register 0xD0 exactly once and
+ * fails with BME68X_E_DEV_NOT_FOUND for any value other than 0x61, leaving that
+ * raw byte in dev.chip_id. The byte is the only bus evidence the driver has, so
+ * it is reported with the expected value, the pin/mode configuration that was
+ * actually used, and the transport results. Interpretation is left to the
+ * reader: the value alone cannot tell a miswired bus from an unpowered sensor.
+ */
+static void bme68x_esp_log_chip_id_mismatch(struct bme68x_esp_dev_t *ctx,
+                                            const bme68x_spi_pins_t *pins)
+{
+    const uint8_t chip_id = ctx->dev.chip_id;
+
+    ESP_LOGE(TAG, "Chip ID reg 0x%02X returned 0x%02X, expected 0x%02X",
+             (unsigned)BME68X_REG_CHIP_ID, (unsigned)chip_id, (unsigned)BME68X_CHIP_ID);
+    ESP_LOGE(TAG, "Bus used: SPI2_HOST MOSI=GPIO%d MISO=GPIO%d SCLK=GPIO%d CS=GPIO%d, "
+                  "mode 0, %d Hz; last callback results read=%d write=%d (0 = transferred)",
+             pins->mosi_gpio, pins->miso_gpio, pins->sclk_gpio, pins->cs_gpio,
+             BME68X_SPI_CLOCK_HZ, (int)ctx->last_read_rslt, (int)ctx->last_write_rslt);
+
+    switch (chip_id) {
+        case BME68X_CHIP_ID_MISO_HIGH:
+            ESP_LOGE(TAG, "0xFF = MISO read high on all 8 clocks, the pattern of a line that "
+                          "nothing drives: check 3.3 V at VDD and VDDIO, shared GND, that CSB "
+                          "is reached from GPIO27, that the breakout is strapped for SPI "
+                          "(not I2C) and that SDO reaches GPIO19");
+            break;
+        case BME68X_CHIP_ID_MISO_LOW:
+            ESP_LOGE(TAG, "0x00 = MISO read low on all 8 clocks: check for a short to GND, "
+                          "SDO/MOSI swapped, or a sensor that is never selected");
+            break;
+        default:
+            ESP_LOGE(TAG, "0x%02X is data from the bus but not a BME688 chip ID: confirm the "
+                          "part marking and the SDI/SDO order. A one-bit shift of 0x61 "
+                          "(0xC2 = 0x61 << 1) suggests clock timing (phase/mode or an extra "
+                          "edge) rather than a wrong pin",
+                     (unsigned)chip_id);
+            break;
+    }
+
+    /* One non-retried re-read of the same register: a stable value and a value
+     * that changes between reads need different physical checks. No bus setting
+     * is changed and no transfer is repeated beyond this single frame. */
+    uint8_t raw_id = 0;
+    int8_t reread = bme68x_spi_read((uint8_t)(BME68X_REG_CHIP_ID | BME68X_SPI_RD_MSK),
+                                    &raw_id, 1, ctx);
+    if (reread != BME68X_OK) {
+        ESP_LOGE(TAG, "Immediate re-read of reg 0x%02X failed: %s (%d)",
+                 (unsigned)BME68X_REG_CHIP_ID, bme68x_esp_strerror(reread), (int)reread);
+    } else if (raw_id == chip_id) {
+        ESP_LOGE(TAG, "Immediate re-read returned 0x%02X (stable, same value)", (unsigned)raw_id);
+    } else {
+        ESP_LOGE(TAG, "Immediate re-read returned 0x%02X, different from 0x%02X: the bus is "
+                      "not carrying a fixed value",
+                 (unsigned)raw_id, (unsigned)chip_id);
     }
 }
 
@@ -276,7 +352,10 @@ esp_err_t bme68x_esp_init(const bme68x_spi_pins_t *pins,
 
     int8_t rslt = bme68x_init(&ctx->dev);
     if (rslt != BME68X_OK) {
-        ESP_LOGE(TAG, "bme68x_init failed: %s", bme68x_esp_strerror(rslt));
+        ESP_LOGE(TAG, "bme68x_init failed: %s (rslt=%d)", bme68x_esp_strerror(rslt), (int)rslt);
+        if (rslt == BME68X_E_DEV_NOT_FOUND) {
+            bme68x_esp_log_chip_id_mismatch(ctx, pins);
+        }
         bme68x_esp_release(ctx);
         return bme68x_esp_err_from_rslt(rslt);
     }
