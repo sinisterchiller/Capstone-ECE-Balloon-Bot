@@ -9,3 +9,6 @@ __pycache__/
 *.pyc
 *.pyo
 .venv/
+
+# RepoMix output
+repomix-output.xml
