@@ -4,14 +4,14 @@
 
 | Stage | Description | Status |
 |-------|-------------|--------|
-| 1 | Confirm target and integration constraints | ✅ Complete |
-| 2 | Obtain the official Espressif parser | ✅ Complete |
-| 3 | Integrate the parser into ESP-IDF build | ✅ Complete |
-| 4 | Add the minimal C++ GPS interface | ✅ Complete |
-| 5 | Connect GPS to the application | ✅ Complete |
-| 6 | Build, flash, and verify on hardware | ⏳ Pending (hardware not available) |
+| 1 | Confirm target and integration constraints | ⚠️ Target/wiring confirmed; receiver settings assumed/unverified |
+| 2 | Obtain the official Espressif parser | ✅ Implemented and build-passed |
+| 3 | Integrate the parser into ESP-IDF build | ✅ Implemented and build-passed |
+| 4 | Add the minimal C++ GPS interface | ✅ Implemented and build-passed |
+| 5 | Connect GPS to the application | ✅ Implemented and build-passed |
+| 6 | Build, flash, and verify on hardware | ⏳ Pending (hardware not available; unverified) |
 
-**Software stages 1–5 are implemented and build-passes.** Stage 6 requires physical ESP32-WROOM + NEO-6M GPS receiver with outdoor sky view; no hardware validation has been performed.
+**Software stages 2–5 are implemented and build-passed.** Stage 1 target board (ESP32-WROOM), NEO-6M module, and RX GPIO26/GND/3.3V wiring are confirmed, but receiver UART factory defaults (9600 8N1 1 Hz) remain assumed and unverified. Stage 6 requires physical hardware with outdoor sky view; no hardware validation has been performed.
 
 ---
 
