@@ -69,18 +69,38 @@ The component owns the bus: `i2c_new_master_bus()` fails with
 
 `mpu9250_esp_init()` runs, in order:
 
-1. `mpu9250_set_interface(MPU9250_INTERFACE_IIC)`, `mpu9250_set_addr_pin(MPU9250_ADDRESS_AD0_LOW)`
-2. `mpu9250_init()` - WHO_AM_I (`0x75`) must read `0x71`, then a soft reset
-3. `mpu9250_set_sleep(false)` - the reset leaves the device asleep
-4. `mpu9250_set_clock_source(PLL)`, `mpu9250_set_sample_rate_divider(19)` (50 Hz),
+1. Preflight WHO_AM_I read through the MPU-9250 I2C device handle (see below)
+2. `mpu9250_set_interface(MPU9250_INTERFACE_IIC)`, `mpu9250_set_addr_pin(MPU9250_ADDRESS_AD0_LOW)`
+3. `mpu9250_init()` - WHO_AM_I (`0x75`) must read `0x71`, then a soft reset
+4. `mpu9250_set_sleep(false)` - the reset leaves the device asleep
+5. `mpu9250_set_clock_source(PLL)`, `mpu9250_set_sample_rate_divider(19)` (50 Hz),
    `mpu9250_set_low_pass_filter(MPU9250_LOW_PASS_FILTER_3)`
-5. `mpu9250_set_accelerometer_range(+-2 g)`, `mpu9250_set_gyroscope_range(+-2000 dps)`
-6. `mpu9250_mag_init()` - bypass on, AK8963 WIA (`0x00`) must read `0x48`, reset,
+6. `mpu9250_set_accelerometer_range(+-2 g)`, `mpu9250_set_gyroscope_range(+-2000 dps)`
+7. `mpu9250_mag_init()` - bypass on, AK8963 WIA (`0x00`) must read `0x48`, reset,
    fuse-ROM sensitivity adjustment (`ASAX/Y/Z`) read
-7. `mpu9250_mag_set_mode(CONTINUOUS2)` (100 Hz), `mpu9250_mag_set_bits(16)`
+8. `mpu9250_mag_set_mode(CONTINUOUS2)` (100 Hz), `mpu9250_mag_set_bits(16)`
 
-Steps 3-7 mirror the upstream basic example; FIFO, DMP, interrupt and
+Steps 4-8 mirror the upstream basic example; FIFO, DMP, interrupt and
 wake-on-motion configuration are deliberately not touched.
+
+The preflight read is diagnostic only. `mpu9250_init()` reports a wrong ID and a
+failed transfer as the same status 5 with the message `mpu9250: id is invalid`, so
+the adapter reads `0x75` once through the same `i2c_master_device` handle the
+callbacks use and logs the outcome before the upstream check runs:
+
+| Log line | Meaning | Returned |
+| --- | --- | --- |
+| `WHO_AM_I (0x75) at 0x68 = 0x71` | Sensor answered with the MPU-9250 ID | continues into `mpu9250_init()` |
+| `WHO_AM_I (0x75) at 0x68 returned 0xNN, expected 0x71` | Something else answered at that address; check AD0 strapping and what else is on the bus | `ESP_ERR_NOT_FOUND` |
+| `WHO_AM_I (0x75) read from 0x68 failed: <esp_err>` | I2C transfer failed; investigate transport error | `ESP_ERR_INVALID_RESPONSE` |
+
+No other ID is accepted and the upstream validation is unchanged: the preflight
+can only fail `mpu9250_esp_init()` earlier with a more specific error, never make
+it succeed where `mpu9250_init()` would have rejected the chip. The read is one
+transfer bounded by the same 100 ms timeout as every other transfer. It runs
+before the upstream driver is linked to the bus, so a failure cannot leave the
+driver half-initialized: it takes the normal `fail:` path, which releases both
+devices, the bus and the context.
 
 ## Measurement contract
 
@@ -151,7 +171,7 @@ handles are the only preconditions.
 | `ESP_ERR_NO_MEM` | Context allocation failed |
 | `ESP_ERR_NOT_FOUND` | WHO_AM_I (`0x75`) did not return `0x71`, or AK8963 WIA did not return `0x48` |
 | `ESP_ERR_NOT_SUPPORTED` | Upstream reported an unsupported interface |
-| `ESP_ERR_INVALID_RESPONSE` | An I2C register read failed |
+| `ESP_ERR_INVALID_RESPONSE` | An I2C register read failed (including the WHO_AM_I preflight) |
 | `ESP_ERR_INVALID_SIZE` | Upstream rejected the requested sample length |
 | `ESP_FAIL` | Bus/device setup, reset or register configuration failed |
 

@@ -71,6 +71,9 @@ typedef struct mpu9250_esp_dev_t *mpu9250_esp_handle_t;
  *    already in use, or the LibDriver rejected the linked callbacks
  *  - ESP_ERR_NOT_FOUND: no MPU-9250 (WHO_AM_I 0x75 != 0x71) or no AK8963
  *    (WIA != 0x48) answered on the bus
+ *  - ESP_ERR_INVALID_RESPONSE: the diagnostic WHO_AM_I preflight read ran
+ *    before the LibDriver init and the I2C transfer itself failed, so the
+ *    transfer did not complete
  *  - ESP_FAIL: I2C bus/device setup, device reset or register configuration failed
  *  - ESP_ERR_NOT_SUPPORTED: the LibDriver reported an unsupported interface
  *

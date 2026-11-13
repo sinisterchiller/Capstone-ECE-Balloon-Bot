@@ -38,6 +38,10 @@ static const char *TAG = "mpu9250_esp";
 #define MPU9250_ESP_MPU_ADDR_7BIT     0x68
 #define MPU9250_ESP_AK8963_ADDR_7BIT  0x0C /* reached through the MPU's I2C bypass */
 
+/* Identification register the upstream mpu9250_init() reads and validates. */
+#define MPU9250_ESP_REG_WHO_AM_I      0x75
+#define MPU9250_ESP_WHO_AM_I_ID       0x71 /* MPU-9250 (both die revisions) */
+
 /* Per-transaction timeout; a 100 kHz byte takes ~90 us, a 14-byte read ~1.3 ms */
 #define MPU9250_ESP_I2C_TIMEOUT_MS    100
 
@@ -184,6 +188,42 @@ static uint8_t mpu9250_esp_iic_write(uint8_t addr, uint8_t reg, uint8_t *buf, ui
     }
 
     return 0;
+}
+
+/*
+ * Report the identification register before the upstream init runs. The upstream
+ * mpu9250_init() collapses "transfer failed" and "wrong chip" into the same
+ * status 5 and only says "id is invalid", which does not say whether the sensor
+ * answered. This preflight reads the same register through the same I2C device
+ * handle the callbacks use and logs either the transport error or the observed
+ * value. It never accepts an ID other than 0x71: the upstream check in
+ * mpu9250_init() still runs and remains the authority on identification.
+ */
+static esp_err_t mpu9250_esp_check_who_am_i(const struct mpu9250_esp_dev_t *ctx)
+{
+    uint8_t reg = MPU9250_ESP_REG_WHO_AM_I;
+    uint8_t id = 0;
+
+    esp_err_t err = i2c_master_transmit_receive(ctx->mpu_dev, &reg, 1, &id, 1,
+                                                MPU9250_ESP_I2C_TIMEOUT_MS);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "WHO_AM_I (0x%02X) read from 0x%02X failed: %s",
+                 (unsigned)MPU9250_ESP_REG_WHO_AM_I, (unsigned)MPU9250_ESP_MPU_ADDR_7BIT,
+                 esp_err_to_name(err));
+        return ESP_ERR_INVALID_RESPONSE;
+    }
+
+    if (id != MPU9250_ESP_WHO_AM_I_ID) {
+        ESP_LOGE(TAG, "WHO_AM_I (0x%02X) at 0x%02X returned 0x%02X, expected 0x%02X",
+                 (unsigned)MPU9250_ESP_REG_WHO_AM_I, (unsigned)MPU9250_ESP_MPU_ADDR_7BIT,
+                 (unsigned)id, (unsigned)MPU9250_ESP_WHO_AM_I_ID);
+        return ESP_ERR_NOT_FOUND;
+    }
+
+    ESP_LOGI(TAG, "WHO_AM_I (0x%02X) at 0x%02X = 0x%02X",
+             (unsigned)MPU9250_ESP_REG_WHO_AM_I, (unsigned)MPU9250_ESP_MPU_ADDR_7BIT,
+             (unsigned)id);
+    return ESP_OK;
 }
 
 /* The adapter owns the bus, so the upstream "iic init" hook has nothing to do
@@ -431,6 +471,11 @@ esp_err_t mpu9250_esp_init(mpu9250_esp_handle_t *out_handle)
         goto fail;
     }
 
+    err = mpu9250_esp_check_who_am_i(ctx);
+    if (err != ESP_OK) {
+        goto fail;
+    }
+
     DRIVER_MPU9250_LINK_INIT(&ctx->handle, mpu9250_handle_t);
     DRIVER_MPU9250_LINK_IIC_INIT(&ctx->handle, mpu9250_esp_iic_init);
     DRIVER_MPU9250_LINK_IIC_DEINIT(&ctx->handle, mpu9250_esp_iic_deinit);
@@ -450,7 +495,8 @@ esp_err_t mpu9250_esp_init(mpu9250_esp_handle_t *out_handle)
     uint8_t rslt = mpu9250_init(&ctx->handle);
     if (rslt != 0) {
         /* mpu9250_init() deinitializes the bus itself on most failure paths; the
-         * cleanup below tolerates a bus that is already gone. */
+         * cleanup below tolerates a bus that is already gone. The WHO_AM_I value
+         * (or the transport error) was already logged by the preflight above. */
         ESP_LOGE(TAG, "MPU-9250 init failed (rslt=%u); bus I2C%d SDA=GPIO%d SCL=GPIO%d %d Hz, "
                       "address 0x%02X (AD0 low), WHO_AM_I (0x75) must return 0x71",
                  (unsigned)rslt, MPU9250_ESP_I2C_PORT, MPU9250_ESP_SDA_GPIO,
