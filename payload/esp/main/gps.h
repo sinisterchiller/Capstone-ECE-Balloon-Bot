@@ -88,3 +88,64 @@ bool gps_has_fix(gps_handle_t handle);
 #ifdef __cplusplus
 }
 #endif
+
+#ifdef __cplusplus
+#include "freertos/FreeRTOS.h"
+
+/**
+ * @brief C++ GPS wrapper for object-oriented usage
+ *
+ * Encapsulates the C adapter handle and provides a simple
+ * init/process interface. The process() method performs one
+ * iteration of fix evaluation, logging, and delay.
+ * Non-copyable, non-movable: stack-only use in app_main.
+ */
+class Gps {
+public:
+    Gps() : handle_(nullptr) {}
+    ~Gps() { if (handle_) gps_deinit(handle_); }
+
+    // Non-copyable, non-movable (stack-only in app_main)
+    Gps(const Gps&) = delete;
+    Gps& operator=(const Gps&) = delete;
+    Gps(Gps&&) = delete;
+    Gps& operator=(Gps&&) = delete;
+
+    /**
+     * @brief Initialize GPS parser and log startup greeting
+     * @return ESP_OK on success, error code on failure
+     */
+    esp_err_t init();
+
+    /**
+     * @brief Perform one iteration: evaluate fix, log with throttling, delay
+     * Does nothing if init() failed or hasn't been called.
+     */
+    void process();
+
+    /**
+     * @brief Check if GPS has a valid, fresh fix
+     * @return true if valid fix, false otherwise
+     */
+    bool has_fix() const { return handle_ && gps_has_fix(handle_); }
+
+    /**
+     * @brief Get latest position snapshot
+     * @param[out] out_position Filled with latest position data
+     * @return true if fresh position available, false otherwise
+     */
+    bool get_latest(gps_position_t *out_position) const {
+        return handle_ && gps_get_latest(handle_, out_position);
+    }
+
+private:
+    gps_handle_t handle_;
+    // Logging throttle state
+    gps_position_t last_logged_{};
+    enum class LogState { NONE, VALID_FIX, NO_FIX };
+    LogState last_log_state_ = LogState::NONE;
+    TickType_t last_log_time_ = 0;
+    static constexpr TickType_t LOG_THROTTLE_MS = pdMS_TO_TICKS(5000);
+    static constexpr TickType_t NO_FIX_LOG_INTERVAL_MS = pdMS_TO_TICKS(30000);
+};
+#endif

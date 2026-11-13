@@ -65,7 +65,7 @@ idf.py -p PORT monitor
 idf.py -p PORT flash monitor
 ```
 
-Expected startup log (from `main.cpp`):
+Expected startup log (from `gps.cpp` `Gps::init()` and `Gps::process()`):
 ```
 I (xxx) gps_demo: GPS demo started, waiting for updates...
 I (xxx) gps_demo: No valid fix (no GPS data received yet or fix stale)
@@ -91,8 +91,9 @@ collected 0 items / 1 error
 ```
 **Note:** `pytest_embedded_idf` is part of the ESP-IDF CI/test environment, not the host Python. The test file itself is syntactically correct and structured for the ESP-IDF test framework. No test execution was possible without the full pytest-embedded environment.
 
-### 6.3 Code inspection — no-fix startup logic (`main.cpp`)
-- On boot: logs "GPS demo started, waiting for updates..."
+### 6.3 Code inspection — no-fix startup logic (`gps.cpp` `Gps::init()` / `Gps::process()`)
+- `Gps::init()`: initializes parser, logs "GPS demo started, waiting for updates..."
+- `Gps::process()`: one iteration — calls `gps_get_latest()`, evaluates fix, logs with throttling, delays 1 s.
 - `gps_get_latest()` returns `false` until first `GPS_UPDATE` event (or if fix is stale > 10 s).
 - With no GPS hardware, the demo logs **"No valid fix (no GPS data received yet or fix stale)"** immediately and re-logs every 30 s (`NO_FIX_LOG_INTERVAL_MS`).
 - Valid fix logging throttled to 5 s (`LOG_THROTTLE_MS`) unless position/satellites change.
@@ -135,9 +136,9 @@ payload/esp/
 ├── CMakeLists.txt                 # EXTRA_COMPONENT_DIRS += drivers, MINIMAL_BUILD ON
 ├── main/
 │   ├── CMakeLists.txt             # SRCS: main.cpp gps.cpp, REQUIRES: nmea_parser
-│   ├── main.cpp                   # Entry point, GPS demo loop
-│   ├── gps.h                      # Minimal C API: init, deinit, get_latest, has_fix
-│   └── gps.cpp                    # Adapter: parser init, event handler, thread-safe snapshot
+│   ├── main.cpp                   # Entry point: declares Gps, calls init(), loops process()
+│   ├── gps.h                      # C API + C++ Gps class (init, process, has_fix, get_latest)
+│   └── gps.cpp                    # Adapter + Gps::init/process: parser, event handler, logging
 ├── drivers/nmea_parser/
 │   ├── CMakeLists.txt             # idf_component_register(REQUIRES esp_event esp_driver_uart)
 │   ├── Kconfig.projbuild          # RX pin default 26, statement enables

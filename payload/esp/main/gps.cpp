@@ -155,3 +155,66 @@ static void gps_event_handler(void *arg, esp_event_base_t event_base, int32_t ev
     }
     /* GPS_UNKNOWN events are intentionally ignored for this minimal adapter */
 }
+
+#ifdef __cplusplus
+
+esp_err_t Gps::init() {
+    if (handle_) {
+        return ESP_ERR_INVALID_STATE;  // Already initialized
+    }
+    esp_err_t err = gps_init(&handle_);
+    if (err == ESP_OK) {
+        ESP_LOGI("gps_demo", "GPS demo started, waiting for updates...");
+    }
+    return err;
+}
+
+void Gps::process() {
+    if (!handle_) {
+        vTaskDelay(pdMS_TO_TICKS(1000));
+        return;
+    }
+
+    gps_position_t pos;
+    bool has_fresh_data = gps_get_latest(handle_, &pos);
+    bool has_fix = has_fresh_data && (pos.fix != GPS_FIX_INVALID) && pos.valid;
+    TickType_t now = xTaskGetTickCount();
+
+    if (has_fix) {
+        bool position_changed = (pos.latitude != last_logged_.latitude) ||
+                                (pos.longitude != last_logged_.longitude) ||
+                                (pos.altitude != last_logged_.altitude) ||
+                                (pos.sats_in_use != last_logged_.sats_in_use);
+        bool throttle_expired = (now - last_log_time_) >= LOG_THROTTLE_MS;
+        bool state_transition = last_log_state_ != LogState::VALID_FIX;
+
+        if (state_transition || position_changed || throttle_expired) {
+            ESP_LOGI("gps_demo",
+                     "Valid fix: lat=%.6f lon=%.6f alt=%.1f fix=%d sats=%u time=%02u:%02u:%02u",
+                     pos.latitude, pos.longitude, pos.altitude,
+                     pos.fix, pos.sats_in_use,
+                     pos.tim.hour, pos.tim.minute, pos.tim.second);
+            last_logged_ = pos;
+            last_log_state_ = LogState::VALID_FIX;
+            last_log_time_ = now;
+        }
+    } else {
+        /* No fresh data or no valid fix */
+        bool state_transition = last_log_state_ != LogState::NO_FIX;
+        bool interval_expired = (now - last_log_time_) >= NO_FIX_LOG_INTERVAL_MS;
+
+        if (state_transition || interval_expired) {
+            if (has_fresh_data) {
+                ESP_LOGI("gps_demo", "No valid fix (fix=%d, valid=%d, sats=%u)", pos.fix, pos.valid, pos.sats_in_use);
+            } else {
+                ESP_LOGI("gps_demo", "No valid fix (no GPS data received yet or fix stale)");
+            }
+            last_log_state_ = LogState::NO_FIX;
+            last_log_time_ = now;
+        }
+    }
+
+    vTaskDelay(pdMS_TO_TICKS(1000));
+}
+
+#endif  // __cplusplus
