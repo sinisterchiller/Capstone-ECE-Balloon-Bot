@@ -64,7 +64,11 @@ env/
 # Language Servers
 .clangd/
 .ccls-cache/
+.clangd/index/
 compile_commands.json
+
+# Cache directories
+.cache/
 
 # Windows specific
 Thumbs.db
