@@ -5,7 +5,7 @@
         <mxCell id="0" />
         <mxCell id="1" parent="0" />
         <mxCell id="flight" parent="1" style="rounded=1;arcSize=3;html=1;whiteSpace=wrap;fillColor=#EAF3FF;strokeColor=#6C9DDA;strokeWidth=2;align=left;verticalAlign=top;spacingTop=23;spacingLeft=26;fontSize=25;fontStyle=1;fontColor=#142339;" value="FLIGHT PAYLOAD · ON BALLOON" vertex="1">
-          <mxGeometry height="811" width="1078" x="52" y="89" as="geometry" />
+          <mxGeometry height="830" width="1078" x="52" y="70" as="geometry" />
         </mxCell>
         <mxCell id="ground" parent="1" style="rounded=1;arcSize=3;html=1;whiteSpace=wrap;fillColor=#EDF9F3;strokeColor=#6DBA93;strokeWidth=2;align=left;verticalAlign=top;spacingTop=23;spacingLeft=26;fontSize=25;fontStyle=1;fontColor=#142339;" value="GROUND STATION" vertex="1">
           <mxGeometry height="800" width="733" x="125" y="960" as="geometry" />
