@@ -11,8 +11,10 @@ Capstone project (ECE 490, Group 13): autonomous weather balloon payload + groun
 ## Key directories
 
 - `ground-station/interface/` — web dashboard (vanilla HTML/CSS/JS, no build step)
-- `ground-station/server/` — Python telemetry ingestion (not started)
-- `ground-station/esp/` — ESP32-S3 firmware (not started)
+- `ground-station/server/` — Python telemetry ingestion (implemented non-hardware stages; physical integration outstanding)
+- `ground-station/esp/` — ESP32-S3 firmware directory (empty; not started)
+- `ground-station/MXproject/` — LoRa-only bench firmware (STM32WL)
+- `ground-station/stmLora-trial/` — decommissioned LoRa bench trial (historical reference)
 - `datasheets/`, `hardware-requirements/` — component documentation
 - `README.md` — full project report (requirements, constraints, trade-offs)
 
@@ -32,4 +34,3 @@ Capstone project (ECE 490, Group 13): autonomous weather balloon payload + groun
 
 - Vanilla JS, ES modules, no frameworks, no package manager.
 - Keep files small and purpose-named.
-- `.claude/memory/` holds detailed decisions/progress; keep it compact and current.
