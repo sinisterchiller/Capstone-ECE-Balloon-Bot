@@ -11,4 +11,11 @@ __pycache__/
 .venv/
 
 # RepoMix output
-repomix-output.xml
+**/*repomix*
+
+# Task directories
+**/task/
+**/tasks/
+
+# VS Code settings
+**/.vscode/
