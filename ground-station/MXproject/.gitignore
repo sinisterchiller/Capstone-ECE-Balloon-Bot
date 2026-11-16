@@ -1,0 +1,5 @@
+# CMake output: top-level preset dirs (build/<Preset>) plus the in-tree
+# CPU1/CPU2 sub-builds created by the ExternalProject rules
+# (CM4/build/<Config>, CM0PLUS/build/<Config>).
+build/
+compile_commands.json

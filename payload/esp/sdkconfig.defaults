@@ -1,0 +1,7 @@
+# ESP-IDF v5.5.2 Project Configuration Defaults
+# This file provides persistent defaults for the project.
+# It is tracked in git; sdkconfig (ignored) is generated from this + user changes.
+
+# Flash size: 4 MB (ESP32-WROOM has 4 MB flash)
+CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y
+CONFIG_ESPTOOLPY_FLASHSIZE="4MB"
