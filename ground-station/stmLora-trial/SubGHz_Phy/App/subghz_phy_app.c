@@ -72,22 +72,8 @@
 #include "app_version.h"
 #include "subghz_phy_version.h"
 #include "usart_if.h"
-#include "stm32wlxx_hal_usart.h"  /* for huart2 extern — DiagMarker blocking USART2 write */
 #include <string.h>
 /* USER CODE END Includes */
-
-/* Startup diagnostic marker — prints via blocking USART2 write before UTIL_ADV_TRACE_Init.
- * Uses HAL_UART_Transmit with HAL_MAX_DELAY (blocking) on huart2, which is already
- * initialized by MX_USART2_UART_Init.  HAL_MAX_DELAY is safe here because HAL_GetTick
- * is called only inside HAL_UART_Transmit's timeout loop, and the call blocks until
- * completion rather than relying on a finite tick count.
- * Usage: DIAG_MARKER("label text") — does not depend on RTC/timers. */
-extern UART_HandleTypeDef huart2;
-static void DiagMarker(const char *msg)
-{
-  HAL_UART_Transmit(&huart2, (uint8_t *)msg, (uint16_t)strlen(msg), HAL_MAX_DELAY);
-  HAL_UART_Transmit(&huart2, (uint8_t *)"\r\n", 2, HAL_MAX_DELAY);
-}
 
 /* External variables ---------------------------------------------------------*/
 /* USER CODE BEGIN EV */
@@ -363,32 +349,14 @@ void SubghzApp_Init(void)
 {
   /* USER CODE BEGIN SubghzApp_Init_1 */
 
-  DiagMarker("DIAG: SubghzApp_Init START");
-
-  /* Replace early APP_LOG calls with blocking UART markers.
-   * These startup APP_LOG calls were replaced to isolate a suspected
-   * advanced-trace issue observed during boot; the exact root cause
-   * is not yet confirmed.
-   * Version strings are omitted here — the main banner in main.c
-   * already reports role, frequency, and TX state. */
-  DiagMarker("DIAG: APP_LOG replaced");
-
   /* Led Timers */
-  DiagMarker("DIAG: timerLed Create START");
   UTIL_TIMER_Create(&timerLed, LED_PERIOD_MS, UTIL_TIMER_ONESHOT, OnledEvent, NULL);
-  DiagMarker("DIAG: timerLed Create OK");
-  DiagMarker("DIAG: timerLed Start START");
   UTIL_TIMER_Start(&timerLed);
-  DiagMarker("DIAG: timerLed Start OK");
 
   /* One-shot PING timer — created but only started by initiator.
    * Re-armed after each exchange or timeout (never free-running). */
-  DiagMarker("DIAG: timerPingOneShot Create START");
   UTIL_TIMER_Create(&timerPingOneShot, APP_CYCLE_DELAY_MS, UTIL_TIMER_ONESHOT,
                     PingOneShotTimerCallback, NULL);
-  DiagMarker("DIAG: timerPingOneShot Create OK");
-
-  DiagMarker("DIAG: SubghzApp_Init timers OK");
 
   /* USER CODE END SubghzApp_Init_1 */
 
@@ -399,56 +367,34 @@ void SubghzApp_Init(void)
   RadioEvents.RxTimeout = OnRxTimeout;
   RadioEvents.RxError = OnRxError;
 
-  DiagMarker("DIAG: Radio.Init");
   Radio.Init(&RadioEvents);
-  DiagMarker("DIAG: Radio.Init OK");
 
   /* USER CODE BEGIN SubghzApp_Init_2 */
-  /*calculate random delay for synchronization*/
-  DiagMarker("DIAG: Radio.Random");
-  random_delay = (Radio.Random()) >> 22; /*10bits random e.g. from 0 to 1023 ms*/
-  DiagMarker("DIAG: Radio.Random OK");
+  /* calculate random delay for synchronization */
+  random_delay = (Radio.Random()) >> 22; /* 10bits random e.g. from 0 to 1023 ms */
 
   /* Radio Set frequency */
-  DiagMarker("DIAG: Radio.SetChannel START");
   Radio.SetChannel(RF_FREQUENCY);
-  DiagMarker("DIAG: Radio.SetChannel OK");
 
-  /* Modulation config — startup-only, replaced APP_LOG (advanced-trace hang risk)
-   * with blocking UART markers to isolate the suspected
-   * APP_LOG hang observed after "DIAG: Radio.Random OK". */
-  DiagMarker("DIAG: Modulation config (LORA)");
+  /* Modulation config */
 
-  /*fills tx buffer*/
+  /* fills tx buffer */
   memset(BufferTx, 0x0, MAX_APP_BUFFER_SIZE);
-  DiagMarker("DIAG: BufferTx memset OK");
 
-  /* Replaced APP_LOG (advanced-trace hang) with blocking UART marker.
-   * random_delay value omitted — main banner in main.c reports it. */
-  DiagMarker("DIAG: random_delay skipped (APP_LOG replaced)");
-
-  /*register task to be run in while(1) after Radio IT*/
-  DiagMarker("DIAG: UTIL_SEQ_RegTask START");
+  /* register task to be run in while(1) after Radio IT */
   UTIL_SEQ_RegTask((1 << CFG_SEQ_Task_SubGHz_Phy_App_Process), UTIL_SEQ_RFU, PingPong_Process);
-  DiagMarker("DIAG: UTIL_SEQ_RegTask OK");
 
   /* NOTE: Removed unnecessary HAL_Delay(RX_TIMEOUT_VALUE + random_delay).
    * The initiator's one-shot PING timer already provides the startup delay.
    * RX can be armed immediately — no blocking wait required. */
 
   /* Enter RX mode immediately after init */
-  DiagMarker("DIAG: RadioRx");
   RadioRx();
-  DiagMarker("DIAG: RadioRx OK");
 
   /* Start one-shot PING timer only for initiator role */
 #if (APP_ROLE_INITIATOR != 0)
-  DiagMarker("DIAG: timerPingOneShot Start START");
   UTIL_TIMER_Start(&timerPingOneShot);
-  DiagMarker("DIAG: timerPingOneShot Start OK");
 #endif
-
-  DiagMarker("DIAG: SubghzApp_Init OK");
 
   /* USER CODE END SubghzApp_Init_2 */
 }
@@ -722,15 +668,6 @@ static void UartPrintStatus(void)
 static void RadioSendWithLength(uint8_t *buf, uint8_t len)
 {
 #if APP_TX_ENABLED != 0
-  /* DIAG: Radio state before TX config */
-  APP_TRACE("[TX-SEND] pre_state=");
-  APP_TRACE_INT((int)Radio.GetStatus());
-  APP_TRACE(" role=");
-  APP_TRACE((APP_ROLE_INITIATOR != 0) ? "INIT" : "RESP");
-  APP_TRACE(" len=");
-  APP_TRACE_INT((int32_t)len);
-  APP_TRACE("\r\n");
-
   Radio.Sleep();
   Radio.SetChannel(RF_FREQUENCY);
 #if ((USE_MODEM_LORA == 1) && (USE_MODEM_FSK == 0))
@@ -749,11 +686,6 @@ static void RadioSendWithLength(uint8_t *buf, uint8_t len)
 #error "Please define a modulation in the subghz_phy_app.h file."
 #endif /* USE_MODEM_LORA | USE_MODEM_FSK */
 
-  /* DIAG: Radio state right before Send() */
-  APP_TRACE("[TX-SEND] pre_send=");
-  APP_TRACE_INT((int)Radio.GetStatus());
-  APP_TRACE("\r\n");
-
   Radio.Send(buf, len);
 #else
   /* TX disabled by compile-time configuration — log and return.
@@ -767,14 +699,6 @@ static void RadioSendWithLength(uint8_t *buf, uint8_t len)
 
 static void RadioRx(void)
 {
-  /* DIAG: Before Sleep/Configure — show radio state entering RadioRx() */
-  RadioState_t pre_state = Radio.GetStatus();
-  APP_TRACE("[RX-ARM] pre_state=");
-  APP_TRACE_INT((int)pre_state);
-  APP_TRACE(" role=");
-  APP_TRACE((APP_ROLE_INITIATOR != 0) ? "INIT" : "RESP");
-  APP_TRACE("\r\n");
-
 #if ((USE_MODEM_LORA == 1) && (USE_MODEM_FSK == 0))
   Radio.Sleep();
   Radio.SetChannel(RF_FREQUENCY);
@@ -807,17 +731,7 @@ static void RadioRx(void)
 #error "Please define a modulation in the subghz_phy_app.h file."
 #endif /* USE_MODEM_LORA | USE_MODEM_FSK */
 
-  /* DIAG: After SetRxConfig, before Rx() — confirm radio is idle before arming */
-  APP_TRACE("[RX-ARM] post_config=");
-  APP_TRACE_INT((int)Radio.GetStatus());
-  APP_TRACE("\r\n");
-
   Radio.Rx(RX_TIMEOUT_VALUE);
-
-  /* DIAG: After Rx() — confirm radio is now in RX_RUNNING */
-  APP_TRACE("[RX-ARM] post_rx=");
-  APP_TRACE_INT((int)Radio.GetStatus());
-  APP_TRACE("\r\n");
 }
 
 /**

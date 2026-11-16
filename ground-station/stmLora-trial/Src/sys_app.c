@@ -29,7 +29,6 @@
 #include "utilities_def.h"
 #include "sys_debug.h"
 #include "usart_if.h"   /* for vcom_Trace — used by UTIL_ADV_TRACE trace path */
-#include "stm32wlxx_hal_usart.h"  /* for huart2 extern — DiagMarker blocking USART2 write */
 
 /* USER CODE BEGIN Includes */
 
@@ -62,19 +61,6 @@ static uint8_t SYS_TimerInitialisedFlag = 0;
 
 /* USER CODE BEGIN PV */
 
-/* Startup diagnostic marker — prints via blocking USART2 write before UTIL_ADV_TRACE_Init.
- * Uses HAL_UART_Transmit with HAL_MAX_DELAY (blocking) on huart2, which is already
- * initialized by MX_USART2_UART_Init.  HAL_MAX_DELAY is safe here because HAL_GetTick
- * is called only inside HAL_UART_Transmit's timeout loop, and the call blocks until
- * completion rather than relying on a finite tick count.
- * Usage: DIAG_MARKER("label text") — does not depend on RTC/timers. */
-extern UART_HandleTypeDef huart2;
-static void DiagMarker(const char *msg)
-{
-  HAL_UART_Transmit(&huart2, (uint8_t *)msg, (uint16_t)strlen(msg), HAL_MAX_DELAY);
-  HAL_UART_Transmit(&huart2, (uint8_t *)"\r\n", 2, HAL_MAX_DELAY);
-}
-
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -99,28 +85,19 @@ void SystemApp_Init(void)
 {
   /* USER CODE BEGIN SystemApp_Init_1 */
 
-  /* Diagnostic: entering SystemApp_Init */
-  DiagMarker("DIAG: SystemApp_Init START");
-
   /* USER CODE END SystemApp_Init_1 */
 
   /* Ensure that MSI is wake-up system clock */
   __HAL_RCC_WAKEUPSTOP_CLK_CONFIG(RCC_STOP_WAKEUPCLOCK_MSI);
 
-  /*Initialize timer and RTC*/
-  DiagMarker("DIAG: UTIL_TIMER_Init");
+  /* Initialize timer and RTC */
   UTIL_TIMER_Init();
-  DiagMarker("DIAG: UTIL_TIMER_Init OK");
   SYS_TimerInitialisedFlag = 1;
   /* Initializes the SW probes pins and the monitor RF pins via Alternate Function */
-  DiagMarker("DIAG: DBG_Init");
   DBG_Init();
-  DiagMarker("DIAG: DBG_Init OK");
 
-  /*Initialize the terminal */
-  DiagMarker("DIAG: UTIL_ADV_TRACE_Init");
+  /* Initialize the terminal */
   UTIL_ADV_TRACE_Init();
-  DiagMarker("DIAG: UTIL_ADV_TRACE_Init OK");
   UTIL_ADV_TRACE_RegisterTimeStampFunction(TimestampNow);
 
   /*Set verbose LEVEL*/
@@ -139,8 +116,6 @@ void SystemApp_Init(void)
 #endif /* LOW_POWER_DISABLE */
 
   /* USER CODE BEGIN SystemApp_Init_2 */
-
-  DiagMarker("DIAG: SystemApp_Init OK");
 
   /* USER CODE END SystemApp_Init_2 */
 }

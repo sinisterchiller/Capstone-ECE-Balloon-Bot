@@ -27,7 +27,6 @@
   *                    UART diagnostics (115200 8N1, USART2):
   *                      Boot message with role, frequency, TX state
   *                      Per-packet TX/RX events with RSSI/SNR
-  *                      Radio diagnostics every ~3 s (chip mode, RSSI stats)
   ******************************************************************************
   * @attention
   *
@@ -46,8 +45,6 @@
 #include "subghz_phy_app.h"    /* for RF_FREQUENCY, TX_OUTPUT_POWER */
 #include "app_subghz_phy.h"    /* MX_SubGHz_Phy_Init, MX_SubGHz_Phy_Process */
 #include "app_build_config.h"  /* APP_ROLE_INITIATOR, APP_TX_ENABLED — single-source config */
-#include "radio.h"             /* for Radio.GetStatus, RadioState_t */
-#include "radio_driver.h"      /* for SUBGRF_GetStatus, RadioPhyStatus_t */
 #include "gpio.h"
 #include "usart_if.h"
 #include "stm32wlxx_nucleo.h"  /* for BSP_LED_On, BSP_LED_Toggle, BOARD_LED_GREEN/RED */
@@ -112,46 +109,6 @@ static void UartPrintInt32(int32_t value)
   }
 }
 
-/**
-  * @brief  Minimal radio state string (inline, no ring buffer dependency).
-  */
-static const char *RadioStateStr(RadioState_t state)
-{
-  switch (state)
-  {
-    case 0: return "IDLE";
-    case 1: return "RX";
-    case 2: return "TX";
-    case 3: return "CAD";
-    default: return "?";
-  }
-}
-
-/* ========================================================================== */
-/*  Radio diagnostics                                                         */
-/* ========================================================================== */
-
-/**
-  * @brief  ChipMode string from SUBGRF_GetStatus().Fields.ChipMode.
-  *
-  *         Per ST RM0453 Get_Status command (3-bit ChipMode field, bits [6:4]):
-  *           0x2 = STBY_RC,  0x3 = STBY_XOSC,  0x4 = FS,
-  *           0x5 = RX,       0x6 = TX.
-  *         Codes 0, 1, 7 are reserved.
-  */
-static const char *ChipModeStr(uint8_t chip_mode)
-{
-  switch (chip_mode)
-  {
-    case 0x02: return "STBY_RC";
-    case 0x03: return "STBY_XOSC";
-    case 0x04: return "FS";
-    case 0x05: return "RX";
-    case 0x06: return "TX";
-    default:   return "???";
-  }
-}
-
 /* ========================================================================== */
 /*  Main entry point                                                          */
 /* ========================================================================== */
@@ -204,94 +161,16 @@ int main(void)
   UartSeparator();
 
   /* 6. Initialize SubGHz_Phy middleware (radio init, callbacks, RX) */
-  UartPrint("  Initializing SubGHz_Phy middleware...\r\n");
   MX_SubGHz_Phy_Init();
-  UartPrint("  SubGHz_Phy initialized OK\r\n");
-
-  /* Post-init radio state diagnostic */
-  UartPrint("  Post-init radio state: ");
-  UartPrint(RadioStateStr(Radio.GetStatus()));
-  UartNewline();
-
-  UartSeparator();
-  UartPrint("  Starting ");
-  UartPrint((APP_ROLE_INITIATOR != 0U) ? "INITIATOR" : "RESPONDER");
-  UartPrint(" task...\r\n");
-  UartPrint("  TX is ");
-  UartPrint((APP_TX_ENABLED != 0U) ? "ENABLED" : "DISABLED");
-  UartPrint(". Waiting for radio events.\r\n");
-  UartSeparator();
 
   /* Turn on green LED to indicate running */
   BSP_LED_On(LED_GREEN);
 
   /* 7. Main loop — process radio events via ST sequencer */
-  uint32_t rssi_sample_tick = 0;        /* ~50 ms RSSI sample timer   */
-  uint32_t diag_tick        = 0;        /* ~3 s diagnostic report     */
-  int16_t  rssi_min         = 0x7FFF;   /* start at max (no signal)   */
-  int16_t  rssi_max         = -0x8000;  /* start at min               */
-  int16_t  rssi_last        = 0;
-  uint32_t rssi_count       = 0;
-
   while (1)
   {
     MX_SubGHz_Phy_Process();
     HAL_Delay(10);
-    uint32_t tick = HAL_GetTick();
-
-    /* RSSI sample (~50 ms cadence, only when RX_RUNNING).
-     * Radio.Rssi(MODEM_LORA) reads the instantaneous RSSI register —
-     * it does NOT change radio state.
-     */
-    if ((uint32_t)(tick - rssi_sample_tick) >= 50)
-    {
-      rssi_sample_tick = tick;
-      if (Radio.GetStatus() == RF_RX_RUNNING)
-      {
-        int16_t rssi = Radio.Rssi(MODEM_LORA);
-        rssi_last = rssi;
-        rssi_count++;
-        if (rssi < rssi_min) rssi_min = rssi;
-        if (rssi > rssi_max) rssi_max = rssi;
-      }
-    }
-
-    /* Periodic radio diagnostics every ~3 s: chip mode, RSSI stats.
-     * Uses unsigned HAL_GetTick arithmetic for wrap-safe timing.
-     * Single SUBGRF_GetStatus() call; prints raw ChipMode/CmdStatus
-     * so unexpected mode or command errors are visible.
-     */
-    if ((uint32_t)(tick - diag_tick) >= 3000)
-    {
-      diag_tick = tick;
-
-      RadioPhyStatus_t phy = SUBGRF_GetStatus();
-      uint8_t chip_mode = phy.Fields.ChipMode;
-
-      UartSeparator();
-      UartPrint("  [DIAG] chip_mode=");
-      UartPrint(ChipModeStr(chip_mode));
-      UartPrintInt32((int32_t)chip_mode);
-      UartPrint(" cmd_status=");
-      UartPrintInt32((int32_t)phy.Fields.CmdStatus);
-      UartPrint(" driver_state=");
-      UartPrint(RadioStateStr(Radio.GetStatus()));
-      UartPrint(" rssi_min=");
-      UartPrintInt32((int32_t)rssi_min);
-      UartPrint(" max=");
-      UartPrintInt32((int32_t)rssi_max);
-      UartPrint(" last=");
-      UartPrintInt32((int32_t)rssi_last);
-      UartPrint(" count=");
-      UartPrintInt32((int32_t)rssi_count);
-      UartNewline();
-
-      /* Reset RSSI accumulators for next interval */
-      rssi_min   = 0x7FFF;
-      rssi_max   = -0x8000;
-      rssi_last  = 0;
-      rssi_count = 0;
-    }
   }
 }
 
