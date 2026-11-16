@@ -125,7 +125,7 @@
         <mxCell id="9lH65jrYtid4InI1oDIH-40" edge="1" parent="1" source="lbl_13" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;fontFamily=Helvetica;fontSize=11;fontColor=default;labelBackgroundColor=default;resizable=0;startArrow=none;startFill=0;" target="esp">
           <mxGeometry relative="1" x="0.0692" as="geometry" />
         </mxCell>
-        <mxCell id="lbl_13" parent="1" style="text;html=1;whiteSpace=wrap;strokeColor=none;fillColor=#F7F9FC;rounded=1;align=center;verticalAlign=middle;fontSize=16;fontColor=#46866B;fontStyle=1;" value="SPI" vertex="1">
+        <mxCell id="lbl_13" parent="1" style="text;html=1;whiteSpace=wrap;strokeColor=none;fillColor=#F7F9FC;rounded=1;align=center;verticalAlign=middle;fontSize=16;fontColor=#46866B;fontStyle=1;" value="UART" vertex="1">
           <mxGeometry height="30" width="81.5" x="550.25" y="1182" as="geometry" />
         </mxCell>
         <mxCell id="9lH65jrYtid4InI1oDIH-43" edge="1" parent="1" source="lbl_15" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;exitX=0.5;exitY=0;exitDx=0;exitDy=0;entryX=1;entryY=0.5;entryDx=0;entryDy=0;fontFamily=Helvetica;fontSize=11;fontColor=default;labelBackgroundColor=default;resizable=0;" target="ingest">
@@ -152,8 +152,8 @@
         <mxCell id="lbl_2" parent="1" style="text;html=1;whiteSpace=wrap;strokeColor=none;fillColor=#F7F9FC;rounded=1;align=center;verticalAlign=middle;fontSize=16;fontColor=#627A94;fontStyle=1;labelBackgroundColor=none;" value="I²C" vertex="1">
           <mxGeometry height="30" width="41" x="368.5" y="674" as="geometry" />
         </mxCell>
-        <mxCell id="lbl_5" parent="1" style="text;html=1;whiteSpace=wrap;strokeColor=none;fillColor=#F7F9FC;rounded=1;align=center;verticalAlign=middle;fontSize=16;fontColor=#627A94;fontStyle=1;" value="SPI" vertex="1">
-          <mxGeometry height="30" width="41" x="570.5" y="667" as="geometry" />
+        <mxCell id="lbl_5" parent="1" style="text;html=1;whiteSpace=wrap;strokeColor=none;fillColor=#F7F9FC;rounded=1;align=center;verticalAlign=middle;fontSize=16;fontColor=#627A94;fontStyle=1;" value="UART" vertex="1">
+          <mxGeometry height="30" width="59" x="561.5" y="667" as="geometry" />
         </mxCell>
         <mxCell id="QCKcWoKJJ518YdZaS72N-16" edge="1" parent="1" source="lbl_0" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.25;entryDx=0;entryDy=0;fontFamily=Helvetica;fontSize=11;fontColor=default;labelBackgroundColor=default;defaultLabelBackgroundColor=page;labelPadding=0 4;resizable=0;" target="mcu">
           <mxGeometry relative="1" as="geometry" />
