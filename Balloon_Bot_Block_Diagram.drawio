@@ -1,6 +1,6 @@
 <mxfile host="app.diagrams.net" agent="ChatGPT">
   <diagram name="Balloon Bot Architecture" id="balloon-bot-architecture">
-    <mxGraphModel dx="2794" dy="1833" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1960" pageHeight="1020" math="0" shadow="0">
+    <mxGraphModel dx="1458" dy="957" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1960" pageHeight="1020" math="0" shadow="0">
       <root>
         <mxCell id="0" />
         <mxCell id="1" parent="0" />
@@ -25,7 +25,7 @@
         <mxCell id="9lH65jrYtid4InI1oDIH-11" edge="1" parent="1" source="lbl_3" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;entryX=0.75;entryY=0;entryDx=0;entryDy=0;" target="mcu">
           <mxGeometry relative="1" as="geometry" />
         </mxCell>
-        <mxCell id="monitor" parent="1" style="rounded=1;arcSize=12;html=1;whiteSpace=wrap;fillColor=#FFF7E8;strokeColor=#D6A34A;strokeWidth=2;align=center;verticalAlign=middle;spacing=7;shadow=0;fontFamily=Arial;fontSize=21;fontColor=#142339;" value="&lt;div style=&quot;font-size:21px;font-weight:700;color:#142339;line-height:1.3;&quot;&gt;Power monitor&lt;/div&gt;&lt;div style=&quot;font-size:16px;color:#566477;margin-top:9px;line-height:1.45;&quot;&gt;Battery voltage / current&lt;br&gt;INA219/INA226-class (TBD)&lt;/div&gt;" vertex="1">
+        <mxCell id="monitor" parent="1" style="rounded=1;arcSize=12;html=1;whiteSpace=wrap;fillColor=#FFF7E8;strokeColor=#D6A34A;strokeWidth=2;align=center;verticalAlign=middle;spacing=7;shadow=0;fontFamily=Arial;fontSize=21;fontColor=#142339;" value="&lt;div style=&quot;line-height: 100%;&quot;&gt;&lt;div style=&quot;font-size: 21px; font-weight: 700; color: rgb(20, 35, 57);&quot;&gt;Power monitor&lt;/div&gt;&lt;div style=&quot;margin-top: 9px;&quot;&gt;&lt;span style=&quot;line-height: 100%; font-size: 16px; color: light-dark(rgb(86, 100, 119), rgb(142, 154, 170));&quot;&gt;Battery voltage / current&lt;br&gt;STC3100&lt;/span&gt;&lt;/div&gt;&lt;/div&gt;" vertex="1">
           <mxGeometry height="104" width="244" x="841" y="168" as="geometry" />
         </mxCell>
         <mxCell id="9lH65jrYtid4InI1oDIH-10" edge="1" parent="1" source="lbl_4" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;" target="sd" value="">
