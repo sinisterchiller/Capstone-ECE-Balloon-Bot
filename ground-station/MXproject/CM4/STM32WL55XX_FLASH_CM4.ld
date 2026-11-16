@@ -12,16 +12,11 @@ ENTRY(Reset_Handler)
 MEMORY
 {
   ROM    (rx)    : ORIGIN = 0x08000000, LENGTH = 128K   /* Flash memory dedicated to CM4 */
-  /* RAM1 is 15 KB, not the full 16 KB of the CM4 half of SRAM1: the last 1 KB
-     (0x20003C00-0x20003FFF) is the CPU1 -> CPU2 GNSS mailbox, which the two
-     cores access at a fixed address (Common/GnssVcp/gnss_vcp_mailbox.h). Keeping
-     it out of this region means neither the linker nor the startup code (which
-     clears .bss) can touch the ring, and the reset stack pointer moves below it. */
-  RAM1   (xrw)   : ORIGIN = 0x20000000, LENGTH = 15K    /* Non-backup SRAM1 dedicated to CM4 */
+  RAM1   (xrw)   : ORIGIN = 0x20000000, LENGTH = 16K    /* Non-backup SRAM1 dedicated to CM4 */
   RAM2   (xrw)   : ORIGIN = 0x20008000, LENGTH = 16K    /* Backup SRAM2 dedicated to CM4 */
 }
 /* Highest address of the user mode stack */
-_estack = ORIGIN(RAM1) + LENGTH(RAM1); /* end of "SRAM1" Ram type memory (below the CPU1->CPU2 mailbox) */
+_estack = ORIGIN(RAM1) + LENGTH(RAM1); /* end of "SRAM1" Ram type memory */
 
 _Min_Heap_Size = 0x200;      /* required amount of heap  */
 _Min_Stack_Size = 0x400; /* required amount of stack */
@@ -69,7 +64,7 @@ SECTIONS
     *(.ARM.extab* .gnu.linkonce.armextab.*)
     . = ALIGN(8);
   } >ROM
-  
+
   .ARM (READONLY) : /* The READONLY keyword is only supported in GCC11 and later, remove it if using GCC10 or earlier. */
   {
     . = ALIGN(8);
@@ -87,7 +82,7 @@ SECTIONS
     PROVIDE_HIDDEN (__preinit_array_end = .);
     . = ALIGN(8);
   } >ROM
-  
+
   .init_array (READONLY) : /* The READONLY keyword is only supported in GCC11 and later, remove it if using GCC10 or earlier. */
   {
     . = ALIGN(8);
@@ -97,7 +92,7 @@ SECTIONS
     PROVIDE_HIDDEN (__init_array_end = .);
     . = ALIGN(8);
   } >ROM
-  
+
   .fini_array (READONLY) : /* The READONLY keyword is only supported in GCC11 and later, remove it if using GCC10 or earlier. */
   {
     . = ALIGN(8);
@@ -112,7 +107,7 @@ SECTIONS
   _sidata = LOADADDR(.data);
 
   /* Initialized data sections into "SRAM1" Ram type memory */
-  .data : 
+  .data :
   {
     . = ALIGN(8);
     _sdata = .;        /* create a global symbol at data start */
@@ -120,7 +115,7 @@ SECTIONS
     *(.data*)          /* .data* sections */
 
     . = ALIGN(8);
-    
+
   } >RAM1 AT> ROM
 
   /* Initialized TLS data section */

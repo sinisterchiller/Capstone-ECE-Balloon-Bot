@@ -31,9 +31,9 @@ message("FW_ROLE: " ${MX_FW_ROLE})
 set(CMAKE_EXPORT_COMPILE_COMMANDS TRUE)
 
 # Compiler options
-set(STM32_MCU_FLAGS  "-mcpu=cortex-m4 " )
+set(STM32_MCU_FLAGS  "-mcpu=cortex-m4 -mthumb" )
 
-#Linker options
+# Linker options
 set(STM32_LINKER_SCRIPT STM32WL55XX_FLASH_CM4.ld)
 set(STM32_LINKER_OPTION  )
 
@@ -63,20 +63,11 @@ enable_language(C ASM)
 # Add include paths
 target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE
     # Add user defined include paths
-    ${CMAKE_CURRENT_SOURCE_DIR}/../Common/GnssVcp  # CPU1 -> CPU2 GNSS mailbox
-    ${CMAKE_CURRENT_SOURCE_DIR}/../Common/Telemetry  # Telemetry packet codec
 )
 
 # Add sources to executable
 target_sources(${CMAKE_PROJECT_NAME} PRIVATE
-    # Add user sources here
-    ${CMAKE_CURRENT_SOURCE_DIR}/Core/Src/usart.c       # USART1 RX only (GNSS)
-    ${CMAKE_CURRENT_SOURCE_DIR}/Core/Src/nmea_rx.c     # NMEA line assembly
-    ${CMAKE_CURRENT_SOURCE_DIR}/Core/Src/nmea_gga.c    # GGA position for the trace line
-    ${CMAKE_CURRENT_SOURCE_DIR}/Core/Src/gnss_vcp.c    # GNSS lines to the CPU2 VCP trace
-    ${CMAKE_CURRENT_SOURCE_DIR}/Core/Src/i2c.c         # I2C2 MPU
-    ${CMAKE_CURRENT_SOURCE_DIR}/Core/Src/mpu.c         # MPU-9250/MPU-6500 driver
-    ${CMAKE_CURRENT_SOURCE_DIR}/../Common/Telemetry/telemetry.c  # Telemetry packet codec
+    # Add user sources here - minimal boot only
 )
 
 # Link directories setup
@@ -89,12 +80,6 @@ target_link_libraries(${CMAKE_PROJECT_NAME} PRIVATE
     # Add user defined libraries
 )
 
-# Add I2C HAL driver sources
-target_sources(${CMAKE_PROJECT_NAME} PRIVATE
-    ${CMAKE_CURRENT_SOURCE_DIR}/../Drivers/STM32WLxx_HAL_Driver/Src/stm32wlxx_hal_i2c.c
-    ${CMAKE_CURRENT_SOURCE_DIR}/../Drivers/STM32WLxx_HAL_Driver/Src/stm32wlxx_hal_i2c_ex.c
-)
-
 # Remove wrong libob.a library dependency when using cpp files
 list(REMOVE_ITEM CMAKE_C_IMPLICIT_LINK_LIBRARIES ob)
 
@@ -102,12 +87,3 @@ list(REMOVE_ITEM CMAKE_C_IMPLICIT_LINK_LIBRARIES ob)
 if((CMAKE_C_STANDARD EQUAL 90) OR (CMAKE_C_STANDARD EQUAL 99))
     message(ERROR "Generated code requires C11 or higher")
 endif()
-
-
-
-
-
-
-
-
-

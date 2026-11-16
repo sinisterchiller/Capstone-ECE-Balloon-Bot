@@ -4,6 +4,7 @@
   * @file    subghz_phy_app.c
   * @author  MCD Application Team
   * @brief   Application of the SubGHz_Phy Middleware
+  *          Simplified LoRa-only PingPong for PAYLOAD/GROUND roles
   ******************************************************************************
   * @attention
   *
@@ -30,15 +31,6 @@
 #include "utilities_def.h"
 #include "app_version.h"
 #include "subghz_phy_version.h"
-
-#if (FW_ROLE == PAYLOAD)
-#include "gnss_status.h"
-#include "mpu_status.h"
-#include "telemetry.h"
-#endif
-#if (FW_ROLE == GROUND)
-#include "telemetry.h"
-#endif
 /* USER CODE END Includes */
 
 /* External variables ---------------------------------------------------------*/
@@ -48,35 +40,14 @@
 
 /* Private typedef -----------------------------------------------------------*/
 /* USER CODE BEGIN PTD */
-/* PingPong states removed - replaced by TelemetryState_t */
+
 /* USER CODE END PTD */
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
 /* Configurations */
-/* Timeout */
-#define RX_TIMEOUT_VALUE              3000
-#define TX_TIMEOUT_VALUE              3000
-/* Size of the payload to be sent */
-#define MAX_APP_BUFFER_SIZE          255
-#if (PAYLOAD_LEN > MAX_APP_BUFFER_SIZE)
-#error PAYLOAD_LEN must be less or equal than MAX_APP_BUFFER_SIZE
-#endif /* (PAYLOAD_LEN > MAX_APP_BUFFER_SIZE) */
-/* Wait for remote to be in Rx, before sending a Tx frame */
-#define RX_TIME_MARGIN                200
-/* Afc bandwidth in Hz */
-#define FSK_AFC_BANDWIDTH             83333
-/* LED blink Period */
-#define LED_PERIOD_MS                 200
-
-#if (FW_ROLE == PAYLOAD)
-/* Telemetry transmit interval (ms) */
-#define TELEMETRY_TX_INTERVAL_MS      10000
-/* Maximum time to wait for ACK after TX (ms) */
-#define ACK_TIMEOUT_MS                2000
-/* MPU freshness observation interval (ms) - must be < GNSS_VCP_MPU_MAX_DATA_AGE_MS/2 */
-#define MPU_FRESHNESS_INTERVAL_MS     100
-#endif
+/* PingPong transmit interval (ms) */
+#define PINGPONG_TX_INTERVAL_MS       5000
 
 /* USER CODE END PD */
 
@@ -105,117 +76,25 @@ static int8_t SnrValue = 0;
 /* Led Timer object */
 static UTIL_TIMER_Object_t timerLed;
 
-#if (FW_ROLE == PAYLOAD)
-/* Telemetry FSM states */
+/* PingPong state machine */
 typedef enum
 {
-  TELEMETRY_STATE_TX,
-  TELEMETRY_STATE_TX_IN_PROGRESS,
-  TELEMETRY_STATE_RX_ACK,
-  TELEMETRY_STATE_WAIT_INTERVAL
-} TelemetryState_t;
+  STATE_RX,
+  STATE_RX_WAIT,
+  STATE_TX,
+  STATE_TX_WAIT
+} PingPongState_t;
 
-static TelemetryState_t TelemetryState = TELEMETRY_STATE_WAIT_INTERVAL;
+static PingPongState_t State = STATE_RX;
 
-/* Telemetry periodic transmit timer */
-static UTIL_TIMER_Object_t timerTelemetryTx;
-/* ACK wait timeout timer */
-static UTIL_TIMER_Object_t timerAckTimeout;
-/* MPU freshness observation timer */
-static UTIL_TIMER_Object_t timerMpuFreshness;
+/* PingPong periodic transmit timer */
+static UTIL_TIMER_Object_t timerTx;
 
-/* Telemetry packet sequence number */
-static uint16_t telemetry_sequence = 0;
+/* PingPong role: true = Master (initiates PING), false = Slave (responds with PONG) */
+static bool IsMaster = true;
 
-/* Pending packet buffer for ACK wait (exact copy of what was transmitted) */
-static uint8_t pending_tx_buffer[TELEMETRY_PACKET_SIZE];
-static uint16_t pending_tx_len = 0;
-static uint16_t pending_sequence = 0;
-
-/* Retransmission state */
-static uint8_t retry_count = 0;
-#define MAX_RETRIES                   2u  /* 2 retries = 3 total attempts */
-#endif /* FW_ROLE == PAYLOAD */
-
-#if (FW_ROLE == GROUND)
-/* Ground station state */
-/* Last acknowledged sequence number for duplicate detection */
-static uint16_t last_rx_sequence = 0;
-static bool     last_rx_sequence_valid = false;
-
-/* Integer fixed-point formatting helpers for embedded printf (no %f support) */
-static void Format_Microdegrees(int32_t udeg, char *buf, uint16_t buf_size)
-{
-  int32_t abs_val = (udeg >= 0) ? udeg : -udeg;
-  int32_t whole = abs_val / 1000000L;
-  int32_t frac = abs_val % 1000000L;
-  if (udeg < 0)
-  {
-    snprintf(buf, buf_size, "-%ld.%06ld", (long)whole, (long)frac);
-  }
-  else
-  {
-    snprintf(buf, buf_size, "%ld.%06ld", (long)whole, (long)frac);
-  }
-}
-
-static void Format_Centimetres(int32_t cm, char *buf, uint16_t buf_size)
-{
-  int32_t abs_val = (cm >= 0) ? cm : -cm;
-  int32_t whole = abs_val / 100L;
-  int32_t frac = abs_val % 100L;
-  if (cm < 0)
-  {
-    snprintf(buf, buf_size, "-%ld.%02ld", (long)whole, (long)frac);
-  }
-  else
-  {
-    snprintf(buf, buf_size, "%ld.%02ld", (long)whole, (long)frac);
-  }
-}
-
-static void Format_MpuDegrees(int16_t raw, char *buf, uint16_t buf_size)
-{
-  /* raw is degrees * 16, convert to hundredths: raw * 100 / 16 = raw * 25 / 4 */
-  int32_t hundredths = ((int32_t)raw * 25) / 4;
-  int32_t abs_h = (hundredths >= 0) ? hundredths : -hundredths;
-  int32_t whole = abs_h / 100;
-  int32_t frac = abs_h % 100;
-  if (hundredths < 0)
-  {
-    snprintf(buf, buf_size, "-%ld.%02ld", (long)whole, (long)frac);
-  }
-  else
-  {
-    snprintf(buf, buf_size, "%ld.%02ld", (long)whole, (long)frac);
-  }
-}
-
-static void Format_MpuSignedDegrees(int16_t raw, char *buf, uint16_t buf_size)
-{
-  /* Same as Format_MpuDegrees but for signed values (roll, pitch) */
-  Format_MpuDegrees(raw, buf, buf_size);
-}
-
-static void Format_MpuHeading(int16_t raw, char *buf, uint16_t buf_size)
-{
-  /* Heading is unsigned 0..360*16 */
-  int32_t hundredths = ((int32_t)raw * 25) / 4;
-  int32_t whole = hundredths / 100;
-  int32_t frac = hundredths % 100;
-  snprintf(buf, buf_size, "%ld.%02ld", (long)whole, (long)frac);
-}
-
-static const char* MpuModelToString(uint8_t model)
-{
-  switch (model)
-  {
-    case 1: return "MPU-6500";
-    case 2: return "MPU-9250";
-    default: return "UNKNOWN";
-  }
-}
-#endif /* FW_ROLE == GROUND */
+/* Packet counter */
+static uint16_t PacketCount = 0;
 
 /* USER CODE END PV */
 
@@ -256,52 +135,21 @@ static void OnRxError(void);
   */
 static void OnledEvent(void *context);
 
-#if (FW_ROLE == PAYLOAD)
 /**
-  * @brief  Telemetry periodic transmit timer callback
+  * @brief  PingPong periodic transmit timer callback
   * @param  context unused
   */
-static void OnTelemetryTxTimer(void *context);
+static void OnTxTimer(void *context);
 
 /**
-  * @brief  ACK wait timeout timer callback
-  * @param  context unused
+  * @brief  PingPong state machine implementation
   */
-static void OnAckTimeoutTimer(void *context);
+static void PingPong_Process(void);
 
 /**
-  * @brief  MPU freshness observation timer callback
-  * @param  context unused
+  * @brief  Configure radio for TX and send packet
   */
-static void OnMpuFreshnessTimer(void *context);
-
-/**
-  * @brief  Telemetry state machine implementation
-  */
-static void Telemetry_Process(void);
-
-/**
-  * @brief  Configure radio for TX and send telemetry packet
-  */
-static void RadioSendTelemetry(void);
-
-/**
-  * @brief  Configure radio for RX (ACK wait or continuous)
-  */
-static void RadioRxContinuous(void);
-
-/**
-  * @brief  Build and queue the next telemetry packet
-  * @return true if packet was built and transmitted, false otherwise
-  */
-static bool Telemetry_BuildAndTransmit(void);
-#endif /* FW_ROLE == PAYLOAD */
-
-#if (FW_ROLE == GROUND)
-/**
-  * @brief  Ground station continuous RX process
-  */
-static void GroundRx_Process(void);
+static void RadioSendPacket(uint8_t *buffer, uint16_t size);
 
 /**
   * @brief  Configure radio for continuous RX
@@ -309,10 +157,9 @@ static void GroundRx_Process(void);
 static void RadioRxContinuous(void);
 
 /**
-  * @brief  Build and send ACK packet for a given sequence
+  * @brief  Prepare and send PING or PONG packet
   */
-static void RadioSendAck(uint16_t sequence);
-#endif /* FW_ROLE == GROUND */
+static void SendPingPong(void);
 
 /* USER CODE END PFP */
 
@@ -322,9 +169,9 @@ void SubghzApp_Init(void)
   /* USER CODE BEGIN SubghzApp_Init_1 */
 
 #if (FW_ROLE == PAYLOAD)
-  APP_LOG(TS_OFF, VLEVEL_M, "\n\rTELEMETRY APP (PAYLOAD)\n\r");
+  APP_LOG(TS_OFF, VLEVEL_M, "\n\rLORA PINGPONG (PAYLOAD)\n\r");
 #else
-  APP_LOG(TS_OFF, VLEVEL_M, "\n\rGROUND STATION (RX ONLY)\n\r");
+  APP_LOG(TS_OFF, VLEVEL_M, "\n\rLORA PINGPONG (GROUND)\n\r");
 #endif
   /* Get SubGHY_Phy APP version*/
   APP_LOG(TS_OFF, VLEVEL_M, "APPLICATION_VERSION: V%X.%X.%X\r\n",
@@ -357,52 +204,35 @@ void SubghzApp_Init(void)
   Radio.SetChannel(RF_FREQUENCY);
 
   /* Radio configuration */
-#if ((USE_MODEM_LORA == 1) && (USE_MODEM_FSK == 0))
   APP_LOG(TS_OFF, VLEVEL_M, "---------------\n\r");
   APP_LOG(TS_OFF, VLEVEL_M, "LORA_MODULATION\n\r");
   APP_LOG(TS_OFF, VLEVEL_M, "LORA_BW=%d kHz\n\r", (1 << LORA_BANDWIDTH) * 125);
   APP_LOG(TS_OFF, VLEVEL_M, "LORA_SF=%d\n\r", LORA_SPREADING_FACTOR);
-#elif ((USE_MODEM_LORA == 0) && (USE_MODEM_FSK == 1))
-  APP_LOG(TS_OFF, VLEVEL_M, "---------------\n\r");
-  APP_LOG(TS_OFF, VLEVEL_M, "FSK_MODULATION\n\r");
-  APP_LOG(TS_OFF, VLEVEL_M, "FSK_BW=%d Hz\n\r", FSK_BANDWIDTH);
-  APP_LOG(TS_OFF, VLEVEL_M, "FSK_DR=%d bits/s\n\r", FSK_DATARATE);
-#else
-#error "Please define a modulation in the subghz_phy_app.h file."
-#endif /* USE_MODEM_LORA | USE_MODEM_FSK */
 
+  /* Create PingPong periodic transmit timer */
+  UTIL_TIMER_Create(&timerTx, PINGPONG_TX_INTERVAL_MS, UTIL_TIMER_PERIODIC, OnTxTimer, NULL);
+
+  /* Register PingPong process task */
+  UTIL_SEQ_RegTask((1 << CFG_SEQ_Task_SubGHz_Phy_App_Process), UTIL_SEQ_RFU, PingPong_Process);
+
+  /* Determine initial role: PAYLOAD starts as Master (sends PING), GROUND starts as Slave (waits for PING) */
 #if (FW_ROLE == PAYLOAD)
-  /* Create telemetry periodic transmit timer (10s period) */
-  UTIL_TIMER_Create(&timerTelemetryTx, TELEMETRY_TX_INTERVAL_MS, UTIL_TIMER_PERIODIC, OnTelemetryTxTimer, NULL);
-  /* Create ACK timeout timer (one-shot) */
-  UTIL_TIMER_Create(&timerAckTimeout, ACK_TIMEOUT_MS, UTIL_TIMER_ONESHOT, OnAckTimeoutTimer, NULL);
-  /* Create MPU freshness observation timer (periodic ~100ms) */
-  UTIL_TIMER_Create(&timerMpuFreshness, MPU_FRESHNESS_INTERVAL_MS, UTIL_TIMER_PERIODIC, OnMpuFreshnessTimer, NULL);
-
-  APP_LOG(TS_ON, VLEVEL_L, "Telemetry interval: %d ms\n\r", TELEMETRY_TX_INTERVAL_MS);
-  APP_LOG(TS_ON, VLEVEL_L, "ACK timeout: %d ms\n\r", ACK_TIMEOUT_MS);
-  APP_LOG(TS_ON, VLEVEL_L, "MPU freshness interval: %d ms\n\r", MPU_FRESHNESS_INTERVAL_MS);
-
-  /* Register telemetry process task */
-  UTIL_SEQ_RegTask((1 << CFG_SEQ_Task_SubGHz_Phy_App_Process), UTIL_SEQ_RFU, Telemetry_Process);
-
-  /* Start periodic transmission timer */
-  UTIL_TIMER_Start(&timerTelemetryTx);
-  /* Start MPU freshness observation timer */
-  UTIL_TIMER_Start(&timerMpuFreshness);
-  /* The periodic timer's first expiry is one interval away: request the first
-     packet now so that it is sent as soon as the sequencer runs. */
-  TelemetryState = TELEMETRY_STATE_TX;
-  UTIL_SEQ_SetTask((1 << CFG_SEQ_Task_SubGHz_Phy_App_Process), CFG_SEQ_Prio_0);
+  IsMaster = true;
+  APP_LOG(TS_ON, VLEVEL_M, "Role: MASTER (sends PING)\n\r");
 #else
-  /* Ground role: continuous RX only (no PingPong) */
-  APP_LOG(TS_OFF, VLEVEL_M, "GROUND STATION (RX + ACK)\n\r");
-  /* Register ground RX process task */
-  UTIL_SEQ_RegTask((1 << CFG_SEQ_Task_SubGHz_Phy_App_Process), UTIL_SEQ_RFU, GroundRx_Process);
-
-  /* Start in continuous RX mode */
-  RadioRxContinuous();
+  IsMaster = false;
+  APP_LOG(TS_ON, VLEVEL_M, "Role: SLAVE (waits for PING, sends PONG)\n\r");
 #endif
+
+  /* Start in RX mode */
+  RadioRxContinuous();
+
+  /* If Master, schedule first transmission after a short delay to let peer enter RX */
+  if (IsMaster)
+  {
+    UTIL_TIMER_Start(&timerTx);
+    APP_LOG(TS_ON, VLEVEL_M, "TX timer started, interval: %d ms\n\r", PINGPONG_TX_INTERVAL_MS);
+  }
   /* USER CODE END SubghzApp_Init_2 */
 }
 
@@ -416,24 +246,15 @@ static void OnTxDone(void)
   /* USER CODE BEGIN OnTxDone */
   APP_LOG(TS_ON, VLEVEL_L, "OnTxDone\n\r");
 
-#if (FW_ROLE == PAYLOAD)
-  /* TX actually completed - now safe to enter RX_ACK and start timer */
-  if (TelemetryState == TELEMETRY_STATE_TX_IN_PROGRESS)
-  {
-    TelemetryState = TELEMETRY_STATE_RX_ACK;
-    /* Start ACK wait timer */
-    UTIL_TIMER_Start(&timerAckTimeout);
-    /* Switch to RX mode to await ACK */
-    RadioRxContinuous();
-  }
-  else
-  {
-    APP_LOG(TS_ON, VLEVEL_L, "OnTxDone: unexpected state %d\n\r", TelemetryState);
-  }
-#else
-  /* Ground role: ACK transmission completed, return to continuous RX */
+  /* Return to RX mode after transmission */
   RadioRxContinuous();
-#endif
+
+  /* If we were the Master, we just sent a PING - wait for PONG */
+  /* If we were the Slave, we just sent a PONG - wait for next PING */
+  State = STATE_RX_WAIT;
+
+  /* Run process task */
+  UTIL_SEQ_SetTask((1 << CFG_SEQ_Task_SubGHz_Phy_App_Process), CFG_SEQ_Prio_0);
   /* USER CODE END OnTxDone */
 }
 
@@ -441,29 +262,15 @@ static void OnRxDone(uint8_t *payload, uint16_t size, int16_t rssi, int8_t LoraS
 {
   /* USER CODE BEGIN OnRxDone */
   APP_LOG(TS_ON, VLEVEL_L, "OnRxDone\n\r");
-#if ((USE_MODEM_LORA == 1) && (USE_MODEM_FSK == 0))
   APP_LOG(TS_ON, VLEVEL_L, "RssiValue=%d dBm, SnrValue=%ddB\n\r", rssi, LoraSnr_FskCfo);
   SnrValue = LoraSnr_FskCfo;
-#endif /* USE_MODEM_LORA | USE_MODEM_FSK */
-#if ((USE_MODEM_LORA == 0) && (USE_MODEM_FSK == 1))
-  APP_LOG(TS_ON, VLEVEL_L, "RssiValue=%d dBm, Cfo=%dkHz\n\r", rssi, LoraSnr_FskCfo);
-  SnrValue = 0;
-#endif /* USE_MODEM_LORA | USE_MODEM_FSK */
 
   /* Reject oversize packets to prevent OOB access */
   if (size > MAX_APP_BUFFER_SIZE)
   {
     APP_LOG(TS_ON, VLEVEL_L, "RX: oversize packet %d > %d, ignoring\n\r", size, MAX_APP_BUFFER_SIZE);
     RxBufferSize = 0;
-    /* Stay in RX */
-#if (FW_ROLE == PAYLOAD)
-    if (TelemetryState == TELEMETRY_STATE_RX_ACK || TelemetryState == TELEMETRY_STATE_WAIT_INTERVAL)
-    {
-      RadioRxContinuous();
-    }
-#else
     RadioRxContinuous();
-#endif
     return;
   }
 
@@ -496,35 +303,9 @@ static void OnTxTimeout(void)
 {
   /* USER CODE BEGIN OnTxTimeout */
   APP_LOG(TS_ON, VLEVEL_L, "OnTxTimeout\n\r");
-#if (FW_ROLE == PAYLOAD)
-  /* TX failed - if we have retries left, retry; otherwise give up */
-  if (TelemetryState == TELEMETRY_STATE_TX_IN_PROGRESS)
-  {
-    if (retry_count < MAX_RETRIES)
-    {
-      retry_count++;
-      APP_LOG(TS_ON, VLEVEL_L, "TX timeout: retry %u/%u for seq=%u\n\r",
-              retry_count, MAX_RETRIES, pending_sequence);
-      /* Retransmit the exact same pending packet */
-      memcpy(BufferTx, pending_tx_buffer, pending_tx_len);
-      RadioSendTelemetry();
-      /* State remains TX_IN_PROGRESS - OnTxDone or OnTxTimeout will handle next step */
-    }
-    else
-    {
-      /* Exhausted retries */
-      APP_LOG(TS_ON, VLEVEL_L, "TX: exhausted retries for seq=%u, logging unacknowledged\n\r", pending_sequence);
-      pending_tx_len = 0;
-      pending_sequence = 0;
-      retry_count = 0;
-      TelemetryState = TELEMETRY_STATE_WAIT_INTERVAL;
-      UTIL_SEQ_SetTask((1 << CFG_SEQ_Task_SubGHz_Phy_App_Process), CFG_SEQ_Prio_0);
-    }
-  }
-#else
-  /* Ground role: ACK transmission failed, return to continuous RX */
+  /* Transmission failed, return to RX */
   RadioRxContinuous();
-#endif
+  State = STATE_RX;
   /* USER CODE END OnTxTimeout */
 }
 
@@ -532,21 +313,9 @@ static void OnRxTimeout(void)
 {
   /* USER CODE BEGIN OnRxTimeout */
   APP_LOG(TS_ON, VLEVEL_L, "OnRxTimeout\n\r");
-#if (FW_ROLE == PAYLOAD)
-  /* RX timeout while waiting for ACK - will be handled by ACK timeout timer */
-  /* Stay in RX_ACK state until ACK timeout fires */
-  if (TelemetryState == TELEMETRY_STATE_RX_ACK)
-  {
-    RadioRxContinuous();
-  }
-  else if (TelemetryState == TELEMETRY_STATE_WAIT_INTERVAL)
-  {
-    RadioRxContinuous();
-  }
-#else
-  /* Ground role: continuous RX */
+  /* RX timeout - if Master, we'll retry on next timer; if Slave, stay in RX */
   RadioRxContinuous();
-#endif
+  State = STATE_RX;
   /* USER CODE END OnRxTimeout */
 }
 
@@ -554,26 +323,16 @@ static void OnRxError(void)
 {
   /* USER CODE BEGIN OnRxError */
   APP_LOG(TS_ON, VLEVEL_L, "OnRxError\n\r");
-#if (FW_ROLE == PAYLOAD)
-  /* RX error while waiting for ACK - restart RX */
-  if (TelemetryState == TELEMETRY_STATE_RX_ACK ||
-      TelemetryState == TELEMETRY_STATE_WAIT_INTERVAL)
-  {
-    RadioRxContinuous();
-  }
-#else
-  /* Ground role: continuous RX */
+  /* RX error - restart RX */
   RadioRxContinuous();
-#endif
+  State = STATE_RX;
   /* USER CODE END OnRxError */
 }
 
 /* USER CODE BEGIN PrFD */
 
-#if (FW_ROLE == PAYLOAD)
-static void RadioSendTelemetry(void)
+static void RadioSendPacket(uint8_t *buffer, uint16_t size)
 {
-#if ((USE_MODEM_LORA == 1) && (USE_MODEM_FSK == 0))
   Radio.Sleep();
   Radio.SetChannel(RF_FREQUENCY);
   Radio.SetTxConfig(MODEM_LORA, TX_OUTPUT_POWER, 0, LORA_BANDWIDTH,
@@ -581,22 +340,12 @@ static void RadioSendTelemetry(void)
                     LORA_PREAMBLE_LENGTH, LORA_FIX_LENGTH_PAYLOAD_ON,
                     true, 0, 0, LORA_IQ_INVERSION_ON, TX_TIMEOUT_VALUE);
   Radio.SetMaxPayloadLength(MODEM_LORA, MAX_APP_BUFFER_SIZE);
-#elif ((USE_MODEM_LORA == 0) && (USE_MODEM_FSK == 1))
-  Radio.SetTxConfig(MODEM_FSK, TX_OUTPUT_POWER, FSK_FDEV, 0,
-                    FSK_DATARATE, 0,
-                    FSK_PREAMBLE_LENGTH, FSK_FIX_LENGTH_PAYLOAD_ON,
-                    true, 0, 0, 0, TX_TIMEOUT_VALUE);
-  Radio.SetMaxPayloadLength(MODEM_FSK, MAX_APP_BUFFER_SIZE);
-#else
-#error "Please define a modulation in the subghz_phy_app.h file."
-#endif /* USE_MODEM_LORA | USE_MODEM_FSK */
 
-  Radio.Send(BufferTx, pending_tx_len);
+  Radio.Send(buffer, size);
 }
 
 static void RadioRxContinuous(void)
 {
-#if ((USE_MODEM_LORA == 1) && (USE_MODEM_FSK == 0))
   Radio.Sleep();
   Radio.SetChannel(RF_FREQUENCY);
   Radio.SetRxConfig(MODEM_LORA, LORA_BANDWIDTH, LORA_SPREADING_FACTOR,
@@ -611,413 +360,127 @@ static void RadioRxContinuous(void)
   {
     Radio.SetMaxPayloadLength(MODEM_LORA, MAX_APP_BUFFER_SIZE);
   }
-#elif ((USE_MODEM_LORA == 0) && (USE_MODEM_FSK == 1))
-  Radio.SetRxConfig(MODEM_FSK, FSK_BANDWIDTH, FSK_DATARATE,
-                    0, FSK_AFC_BANDWIDTH, FSK_PREAMBLE_LENGTH,
-                    0, FSK_FIX_LENGTH_PAYLOAD_ON, 0, true,
-                    0, 0, false, true);
-  if (LORA_FIX_LENGTH_PAYLOAD_ON == true)
-  {
-    Radio.SetMaxPayloadLength(MODEM_FSK, PAYLOAD_LEN);
-  }
-  else
-  {
-    Radio.SetMaxPayloadLength(MODEM_FSK, MAX_APP_BUFFER_SIZE);
-  }
-#else
-#error "Please define a modulation in the subghz_phy_app.h file."
-#endif /* USE_MODEM_LORA | USE_MODEM_FSK */
 
   /* Continuous RX: timeout 0 means stay in RX until packet received */
   Radio.Rx(0);
 }
 
-static bool Telemetry_BuildAndTransmit(void)
+static void SendPingPong(void)
 {
-  TelemetryGpsStatus gps_status;
-  MpuTelemetryStatus mpu_status_raw;
-  TelemetryMpuStatus mpu_status;
-  bool has_fix;
-  bool has_mpu;
+  /* Prepare packet: "PING" or "PONG" followed by counter and padding */
+  memset(BufferTx, 0, PAYLOAD_LEN);
 
-  /* Drop anything received before this packet existed: only a packet sent
-     after this point can acknowledge it, so a leftover ACK (or a packet of
-     another transmitter) must not be matched against the new sequence. */
-  RxBufferSize = 0;
-
-  /* Read latest GPS status from shared memory */
-  has_fix = GNSS_STATUS_ReadLatest(&gps_status);
-
-  /* Read latest MPU status from shared memory */
-  has_mpu = MPU_STATUS_ReadLatest(&mpu_status_raw);
-
-  /* Convert MPU status to telemetry format */
-  mpu_status.valid = has_mpu ? mpu_status_raw.valid : 0u;
-  mpu_status.heading_valid = has_mpu ? mpu_status_raw.heading_valid : 0u;
-  mpu_status.model = has_mpu ? mpu_status_raw.model : GNSS_VCP_MPU_MODEL_UNKNOWN;
-  mpu_status.heading = has_mpu ? mpu_status_raw.heading : 0;
-  mpu_status.roll = has_mpu ? mpu_status_raw.roll : 0;
-  mpu_status.pitch = has_mpu ? mpu_status_raw.pitch : 0;
-
-  /* Encode combined telemetry packet (v3: GPS + MPU) */
-  if (!Telemetry_EncodeCombinedStatus(&gps_status, &mpu_status, telemetry_sequence, BufferTx, MAX_APP_BUFFER_SIZE))
+  if (IsMaster)
   {
-    APP_LOG(TS_ON, VLEVEL_L, "TX: encode failed\n\r");
-    return false;
-  }
-
-  pending_tx_len = TELEMETRY_PACKET_SIZE;
-  pending_sequence = telemetry_sequence;
-  retry_count = 0;  /* Reset retry counter for new packet */
-
-  /* Store copy of transmitted packet for potential ACK matching */
-  memcpy(pending_tx_buffer, BufferTx, pending_tx_len);
-
-  /* Log transmission */
-  if (gps_status.fix_valid != 0u)
-  {
-    APP_LOG(TS_ON, VLEVEL_L, "TX: seq=%u FIX lat=%ld lon=%ld alt=%ld sats=%u\n\r",
-            telemetry_sequence,
-            gps_status.latitude_udeg,
-            gps_status.longitude_udeg,
-            gps_status.altitude_cm,
-            gps_status.satellites_used);
+    memcpy(BufferTx, "PING", 4);
   }
   else
   {
-    APP_LOG(TS_ON, VLEVEL_L, "TX: seq=%u NO_FIX\n\r", telemetry_sequence);
+    memcpy(BufferTx, "PONG", 4);
   }
 
-  if (mpu_status.valid != 0u)
-  {
-    const char* model_str = (mpu_status.model == GNSS_VCP_MPU_MODEL_9250) ? "MPU-9250" :
-                            (mpu_status.model == GNSS_VCP_MPU_MODEL_6500) ? "MPU-6500" : "UNKNOWN";
-    if (mpu_status.heading_valid != 0u)
-    {
-      APP_LOG(TS_ON, VLEVEL_L, "MPU: seq=%u %s VALID hdg=%d roll=%d pitch=%d\n\r",
-              mpu_status_raw.seq,
-              model_str,
-              mpu_status.heading,
-              mpu_status.roll,
-              mpu_status.pitch);
-    }
-    else
-    {
-      APP_LOG(TS_ON, VLEVEL_L, "MPU: seq=%u %s VALID hdg=UNAVAILABLE roll=%d pitch=%d\n\r",
-              mpu_status_raw.seq,
-              model_str,
-              mpu_status.roll,
-              mpu_status.pitch);
-    }
-  }
-  else
-  {
-    APP_LOG(TS_ON, VLEVEL_L, "MPU: seq=%u INVALID\n\r", telemetry_sequence);
-  }
+  /* Add packet counter (2 bytes, little-endian) */
+  BufferTx[4] = (uint8_t)(PacketCount & 0xFF);
+  BufferTx[5] = (uint8_t)((PacketCount >> 8) & 0xFF);
 
-  /* Increment sequence for next packet */
-  telemetry_sequence++;
+  /* Increment counter for next packet */
+  PacketCount++;
 
-  /* Transmit */
-  RadioSendTelemetry();
-  return true;
+  /* Send packet */
+  RadioSendPacket(BufferTx, PAYLOAD_LEN);
+  State = STATE_TX_WAIT;
 }
 
-static void Telemetry_Process(void)
+static void PingPong_Process(void)
 {
-  switch (TelemetryState)
+  switch (State)
   {
-    case TELEMETRY_STATE_TX:
-      /* Build and transmit telemetry packet */
-      if (!Telemetry_BuildAndTransmit())
-      {
-        /* Transmission setup failed, wait for next interval */
-        TelemetryState = TELEMETRY_STATE_WAIT_INTERVAL;
-      }
-      else
-      {
-        /* Transmission started, OnTxDone will transition to RX_ACK */
-        TelemetryState = TELEMETRY_STATE_TX_IN_PROGRESS;
-      }
+    case STATE_RX:
+      /* Already in RX mode, nothing to do */
       break;
 
-    case TELEMETRY_STATE_TX_IN_PROGRESS:
+    case STATE_RX_WAIT:
+      /* Just returned to RX after TX, wait for packet */
+      break;
+
+    case STATE_TX:
+      /* Time to send a packet */
+      SendPingPong();
+      break;
+
+    case STATE_TX_WAIT:
       /* Waiting for OnTxDone or OnTxTimeout callback */
-      /* Do nothing here - callbacks handle transitions */
-      break;
-
-    case TELEMETRY_STATE_RX_ACK:
-      /* Waiting for ACK */
-      if (RxBufferSize > 0)
-      {
-        uint16_t ack_sequence = 0;
-        bool is_ack = Telemetry_DecodeAck(BufferRx, RxBufferSize, &ack_sequence);
-        RxBufferSize = 0;
-
-        if (is_ack && ack_sequence == pending_sequence)
-        {
-          /* Valid ACK for our pending packet */
-          APP_LOG(TS_ON, VLEVEL_L, "ACK: received for seq=%u\n\r", ack_sequence);
-          UTIL_TIMER_Stop(&timerAckTimeout);
-          pending_tx_len = 0;
-          pending_sequence = 0;
-          TelemetryState = TELEMETRY_STATE_WAIT_INTERVAL;
-          /* Enter continuous RX until next TX */
-          RadioRxContinuous();
-        }
-        else
-        {
-          /* Not a valid ACK for our packet - ignore, keep waiting */
-          if (is_ack)
-          {
-            APP_LOG(TS_ON, VLEVEL_L, "ACK: ignored mismatched seq=%u (expected %u)\n\r",
-                    ack_sequence, pending_sequence);
-          }
-          else
-          {
-            APP_LOG(TS_ON, VLEVEL_L, "RX: ignored non-ACK packet in RX_ACK\n\r");
-          }
-          RadioRxContinuous();
-        }
-      }
-      break;
-
-    case TELEMETRY_STATE_WAIT_INTERVAL:
-      /* Waiting for next periodic timer trigger */
-      /* Radio is in continuous RX mode */
       break;
 
     default:
-      TelemetryState = TELEMETRY_STATE_WAIT_INTERVAL;
+      State = STATE_RX;
       break;
   }
-}
 
-static void OnTelemetryTxTimer(void *context)
-{
-  (void)context;
-  /* Periodic timer fired - time to send next telemetry packet */
-  if (TelemetryState == TELEMETRY_STATE_WAIT_INTERVAL)
-  {
-    TelemetryState = TELEMETRY_STATE_TX;
-    UTIL_SEQ_SetTask((1 << CFG_SEQ_Task_SubGHz_Phy_App_Process), CFG_SEQ_Prio_0);
-  }
-  else
-  {
-    /* Previous transmission still pending (ACK wait or TX in progress) */
-    /* Log but don't transmit - the interval timer is periodic so we'll catch the next one */
-    APP_LOG(TS_ON, VLEVEL_L, "TX timer: busy, skipping interval\n\r");
-  }
-}
-
-static void OnAckTimeoutTimer(void *context)
-{
-  (void)context;
-  /* ACK timeout expired */
-  if (TelemetryState == TELEMETRY_STATE_RX_ACK)
-  {
-    APP_LOG(TS_ON, VLEVEL_L, "ACK: timeout for seq=%u (attempt %u/%u)\n\r",
-            pending_sequence, retry_count + 1, MAX_RETRIES + 1);
-    if (retry_count < MAX_RETRIES)
-    {
-      retry_count++;
-      APP_LOG(TS_ON, VLEVEL_L, "RETRY: attempt %u for seq=%u\n\r", retry_count, pending_sequence);
-      /* Retransmit the exact same pending packet */
-      memcpy(BufferTx, pending_tx_buffer, pending_tx_len);
-      TelemetryState = TELEMETRY_STATE_TX_IN_PROGRESS;
-      RadioSendTelemetry();
-      /* OnTxDone will start new ACK timer and enter RX_ACK */
-    }
-    else
-    {
-      /* Exhausted all attempts */
-      APP_LOG(TS_ON, VLEVEL_L, "ACK: exhausted %u attempts for seq=%u, logging unacknowledged\n\r",
-              MAX_RETRIES + 1, pending_sequence);
-      pending_tx_len = 0;
-      pending_sequence = 0;
-      retry_count = 0;
-      TelemetryState = TELEMETRY_STATE_WAIT_INTERVAL;
-      /* Enter continuous RX until next TX */
-      RadioRxContinuous();
-    }
-  }
-}
-
-static void OnMpuFreshnessTimer(void *context)
-{
-  (void)context;
-  /* Periodic freshness observation: call the consumer-side freshness check
-     to observe the latest MPU publication and update the snapshot watch.
-     This runs at ~100ms, well within the 500ms age window, so the watch
-     will see publications replaced within one age window and establish
-     change_seen=true. The result is cached in the watch; telemetry reads
-     at 10s use the already-updated state. */
-  MPU_STATUS_ObserveFreshness();
-}
-#else
-/* Ground role: continuous RX + ACK */
-static void RadioRxContinuous(void)
-{
-#if ((USE_MODEM_LORA == 1) && (USE_MODEM_FSK == 0))
-  Radio.Sleep();
-  Radio.SetChannel(RF_FREQUENCY);
-  Radio.SetRxConfig(MODEM_LORA, LORA_BANDWIDTH, LORA_SPREADING_FACTOR,
-                    LORA_CODINGRATE, 0, LORA_PREAMBLE_LENGTH,
-                    LORA_SYMBOL_TIMEOUT, LORA_FIX_LENGTH_PAYLOAD_ON,
-                    0, true, 0, 0, LORA_IQ_INVERSION_ON, true);
-  if (LORA_FIX_LENGTH_PAYLOAD_ON == true)
-  {
-    Radio.SetMaxPayloadLength(MODEM_LORA, PAYLOAD_LEN);
-  }
-  else
-  {
-    Radio.SetMaxPayloadLength(MODEM_LORA, MAX_APP_BUFFER_SIZE);
-  }
-#elif ((USE_MODEM_LORA == 0) && (USE_MODEM_FSK == 1))
-  Radio.SetRxConfig(MODEM_FSK, FSK_BANDWIDTH, FSK_DATARATE,
-                    0, FSK_AFC_BANDWIDTH, FSK_PREAMBLE_LENGTH,
-                    0, FSK_FIX_LENGTH_PAYLOAD_ON, 0, true,
-                    0, 0, false, true);
-  if (LORA_FIX_LENGTH_PAYLOAD_ON == true)
-  {
-    Radio.SetMaxPayloadLength(MODEM_FSK, PAYLOAD_LEN);
-  }
-  else
-  {
-    Radio.SetMaxPayloadLength(MODEM_FSK, MAX_APP_BUFFER_SIZE);
-  }
-#else
-#error "Please define a modulation in the subghz_phy_app.h file."
-#endif /* USE_MODEM_LORA | USE_MODEM_FSK */
-
-  /* Continuous RX: timeout 0 means stay in RX until packet received */
-  Radio.Rx(0);
-}
-
-static void RadioSendAck(uint16_t sequence)
-{
-#if ((USE_MODEM_LORA == 1) && (USE_MODEM_FSK == 0))
-  Radio.Sleep();
-  Radio.SetChannel(RF_FREQUENCY);
-  Radio.SetTxConfig(MODEM_LORA, TX_OUTPUT_POWER, 0, LORA_BANDWIDTH,
-                    LORA_SPREADING_FACTOR, LORA_CODINGRATE,
-                    LORA_PREAMBLE_LENGTH, LORA_FIX_LENGTH_PAYLOAD_ON,
-                    true, 0, 0, LORA_IQ_INVERSION_ON, TX_TIMEOUT_VALUE);
-  Radio.SetMaxPayloadLength(MODEM_LORA, MAX_APP_BUFFER_SIZE);
-#elif ((USE_MODEM_LORA == 0) && (USE_MODEM_FSK == 1))
-  Radio.SetTxConfig(MODEM_FSK, TX_OUTPUT_POWER, FSK_FDEV, 0,
-                    FSK_DATARATE, 0,
-                    FSK_PREAMBLE_LENGTH, FSK_FIX_LENGTH_PAYLOAD_ON,
-                    true, 0, 0, 0, TX_TIMEOUT_VALUE);
-  Radio.SetMaxPayloadLength(MODEM_FSK, MAX_APP_BUFFER_SIZE);
-#else
-#error "Please define a modulation in the subghz_phy_app.h file."
-#endif /* USE_MODEM_LORA | USE_MODEM_FSK */
-
-  /* Encode ACK packet */
-  if (!Telemetry_EncodeAck(sequence, BufferTx, MAX_APP_BUFFER_SIZE))
-  {
-    APP_LOG(TS_ON, VLEVEL_L, "ACK: encode failed for seq=%u\n\r", sequence);
-    return;
-  }
-
-  /* Transmit ACK */
-  Radio.Send(BufferTx, TELEMETRY_ACK_PACKET_SIZE);
-}
-
-static void GroundRx_Process(void)
-{
   /* Process received packet if any */
-  if (RxBufferSize == 0)
+  if (RxBufferSize > 0)
   {
-    return;
-  }
+    /* Check if received packet is PING or PONG */
+    /* Require >= 6 bytes: 4 for "PING"/"PONG" + 2 for counter */
+    bool is_ping = (RxBufferSize >= 6) && (memcmp(BufferRx, "PING", 4) == 0);
+    bool is_pong = (RxBufferSize >= 6) && (memcmp(BufferRx, "PONG", 4) == 0);
 
-  uint16_t rx_sequence = 0;
-  TelemetryGpsStatus gps_status;
-  TelemetryMpuStatus mpu_status;
-  bool is_telemetry = Telemetry_DecodeCombinedStatus(BufferRx, RxBufferSize, &gps_status, &mpu_status, &rx_sequence);
-  RxBufferSize = 0;
-
-  if (!is_telemetry)
-  {
-    /* Not a valid telemetry packet - ignore, stay in RX */
-    APP_LOG(TS_ON, VLEVEL_L, "RX: invalid telemetry packet, ignoring\n\r");
-    RadioRxContinuous();
-    return;
-  }
-
-  /* Valid telemetry packet received (strict v3 length 26 enforced by codec) */
-  bool is_duplicate = (last_rx_sequence_valid && rx_sequence == last_rx_sequence);
-
-  /* Log the packet (only if not a duplicate) */
-  if (!is_duplicate)
-  {
-    char lat_buf[32], lon_buf[32], alt_buf[32];
-    char hdg_buf[16], roll_buf[16], pitch_buf[16];
-
-    if (gps_status.fix_valid != 0u)
+    if (is_ping)
     {
-      Format_Microdegrees(gps_status.latitude_udeg, lat_buf, sizeof(lat_buf));
-      Format_Microdegrees(gps_status.longitude_udeg, lon_buf, sizeof(lon_buf));
-      Format_Centimetres(gps_status.altitude_cm, alt_buf, sizeof(alt_buf));
-      APP_LOG(TS_ON, VLEVEL_L, "RX: seq=%u FIX lat=%s lon=%s alt=%sm sats=%u RSSI=%d SNR=%d\n\r",
-              rx_sequence,
-              lat_buf, lon_buf, alt_buf,
-              gps_status.satellites_used,
-              RssiValue,
-              SnrValue);
-    }
-    else
-    {
-      APP_LOG(TS_ON, VLEVEL_L, "RX: seq=%u NO_FIX RSSI=%d SNR=%d\n\r",
-              rx_sequence,
-              RssiValue,
-              SnrValue);
-    }
-    if (mpu_status.valid != 0u)
-    {
-      const char* model_str = MpuModelToString(mpu_status.model);
-      if (mpu_status.heading_valid != 0u)
+      APP_LOG(TS_ON, VLEVEL_M, "RX: PING received (cnt=%d)\n\r",
+              (BufferRx[5] << 8) | BufferRx[4]);
+
+      if (!IsMaster)
       {
-        Format_MpuHeading(mpu_status.heading, hdg_buf, sizeof(hdg_buf));
-        Format_MpuSignedDegrees(mpu_status.roll, roll_buf, sizeof(roll_buf));
-        Format_MpuSignedDegrees(mpu_status.pitch, pitch_buf, sizeof(pitch_buf));
-        APP_LOG(TS_ON, VLEVEL_L, "MPU: seq=%u %s VALID hdg=%d (%s) roll=%d (%s) pitch=%d (%s)\n\r",
-                rx_sequence,
-                model_str,
-                mpu_status.heading, hdg_buf,
-                mpu_status.roll, roll_buf,
-                mpu_status.pitch, pitch_buf);
+        /* We are Slave, respond with PONG */
+        IsMaster = false;  /* Remain slave */
+        State = STATE_TX;
+        UTIL_SEQ_SetTask((1 << CFG_SEQ_Task_SubGHz_Phy_App_Process), CFG_SEQ_Prio_0);
       }
       else
       {
-        Format_MpuSignedDegrees(mpu_status.roll, roll_buf, sizeof(roll_buf));
-        Format_MpuSignedDegrees(mpu_status.pitch, pitch_buf, sizeof(pitch_buf));
-        APP_LOG(TS_ON, VLEVEL_L, "MPU: seq=%u %s VALID hdg=UNAVAILABLE roll=%d (%s) pitch=%d (%s)\n\r",
-                rx_sequence,
-                model_str,
-                mpu_status.roll, roll_buf,
-                mpu_status.pitch, pitch_buf);
+        /* We are Master but received PING - other side also thinks it's Master */
+        /* Stay Master, ignore */
+        APP_LOG(TS_ON, VLEVEL_L, "RX: Unexpected PING while Master\n\r");
+      }
+    }
+    else if (is_pong)
+    {
+      APP_LOG(TS_ON, VLEVEL_M, "RX: PONG received (cnt=%d)\n\r",
+              (BufferRx[5] << 8) | BufferRx[4]);
+
+      if (IsMaster)
+      {
+        /* We are Master, received PONG response - good, wait for next interval */
+        State = STATE_RX;
+      }
+      else
+      {
+        /* We are Slave but received PONG - other side also thinks it's Slave */
+        /* Stay Slave, ignore */
+        APP_LOG(TS_ON, VLEVEL_L, "RX: Unexpected PONG while Slave\n\r");
       }
     }
     else
     {
-      APP_LOG(TS_ON, VLEVEL_L, "MPU: seq=%u INVALID\n\r", rx_sequence);
+      APP_LOG(TS_ON, VLEVEL_L, "RX: Unknown packet type\n\r");
     }
-    last_rx_sequence = rx_sequence;
-    last_rx_sequence_valid = true;
-  }
-  else
-  {
-    APP_LOG(TS_ON, VLEVEL_L, "RX: seq=%u DUPLICATE (ACK only)\n\r", rx_sequence);
-  }
 
-  /* Always send ACK for valid packets (including duplicates) - 4 bytes */
-  RadioSendAck(rx_sequence);
-  /* OnTxDone will return to RX */
+    RxBufferSize = 0;
+  }
 }
-#endif
+
+static void OnTxTimer(void *context)
+{
+  (void)context;
+  /* Periodic timer fired - Master sends next PING */
+  if (IsMaster && (State == STATE_RX || State == STATE_RX_WAIT))
+  {
+    State = STATE_TX;
+    UTIL_SEQ_SetTask((1 << CFG_SEQ_Task_SubGHz_Phy_App_Process), CFG_SEQ_Prio_0);
+  }
+  /* If Slave, timer is ignored (Slave only responds to PING) */
+}
 
 static void OnledEvent(void *context)
 {

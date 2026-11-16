@@ -47,7 +47,7 @@ extern "C" {
 #define PAYLOAD 1
 #define GROUND  0
 
-/* MODEM type: one shall be 1 the other shall be 0 */
+/* MODEM type: LoRa only */
 #define USE_MODEM_LORA  1
 #define USE_MODEM_FSK   0
 
@@ -61,7 +61,6 @@ extern "C" {
 #define TX_OUTPUT_POWER                             14        /* dBm */
 #endif /* TX_OUTPUT_POWER */
 
-#if (( USE_MODEM_LORA == 1 ) && ( USE_MODEM_FSK == 0 ))
 #define LORA_BANDWIDTH                              0         /* [0: 125 kHz, 1: 250 kHz, 2: 500 kHz, 3: Reserved] */
 #define LORA_SPREADING_FACTOR                       7         /* [SF7..SF12] */
 #define LORA_CODINGRATE                             1         /* [1: 4/5, 2: 4/6, 3: 4/7, 4: 4/8] */
@@ -70,19 +69,20 @@ extern "C" {
 #define LORA_FIX_LENGTH_PAYLOAD_ON                  false
 #define LORA_IQ_INVERSION_ON                        false
 
-#elif (( USE_MODEM_LORA == 0 ) && ( USE_MODEM_FSK == 1 ))
-
-#define FSK_FDEV                                    25000     /* Hz */
-#define FSK_DATARATE                                50000     /* bps */
-#define FSK_BANDWIDTH                               50000     /* Hz */
-#define FSK_PREAMBLE_LENGTH                         5         /* Same for Tx and Rx */
-#define FSK_FIX_LENGTH_PAYLOAD_ON                   false
-
-#else
-#error "Please define a modem in the compiler subghz_phy_app.h."
-#endif /* USE_MODEM_LORA | USE_MODEM_FSK */
-
 #define PAYLOAD_LEN                                 64
+
+/* PingPong application constants */
+#define RX_TIMEOUT_VALUE                            3000
+#define TX_TIMEOUT_VALUE                            3000
+#define MAX_APP_BUFFER_SIZE                         255
+#if (PAYLOAD_LEN > MAX_APP_BUFFER_SIZE)
+#error PAYLOAD_LEN must be less or equal than MAX_APP_BUFFER_SIZE
+#endif /* (PAYLOAD_LEN > MAX_APP_BUFFER_SIZE) */
+
+/* Wait for remote to be in Rx, before sending a Tx frame */
+#define RX_TIME_MARGIN                              200
+/* LED blink Period */
+#define LED_PERIOD_MS                               200
 
 /* USER CODE BEGIN EC */
 
